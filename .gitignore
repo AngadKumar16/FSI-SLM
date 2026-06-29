@@ -1,0 +1,12 @@
+# ML artifacts
+artifacts/
+*.safetensors
+*.faiss
+*.jsonl
+
+# datasets
+Data/Papers/
+
+# model outputs
+checkpoints/
+runs/
