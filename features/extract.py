@@ -24,7 +24,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-from data.schema import (
+from Data.schema import (
     FeatureRecord,
     ForceCoefficients,
     PIVDerived,

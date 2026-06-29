@@ -11,7 +11,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from data.schema import FeatureRecord
+from Data.schema import FeatureRecord
 
 
 @dataclass

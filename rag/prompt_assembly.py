@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import List
 
-from data.schema import FeatureRecord
+from Data.schema import FeatureRecord
 from rag.retrieve import RetrievalResult
 from train.tokenization.prompt_template import SYSTEM_PROMPT, apply_chat_template
 

@@ -12,7 +12,7 @@ Tests cover:
 from __future__ import annotations
 
 import pytest
-from data.schema import (
+from Data.schema import (
     AmplitudeTrend,
     FeatureRecord,
     FlowConditions,

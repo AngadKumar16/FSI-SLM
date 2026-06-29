@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from data.schema import FeatureRecord, FlowRegime, LockInStatus
+from Data.schema import FeatureRecord, FlowRegime, LockInStatus
 from eval.validate_output import parse_structured_fields
 
 

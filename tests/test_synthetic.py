@@ -12,8 +12,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from data.schema import FlowRegime, RawExperiment
-from data.synthetic import (
+from Data.schema import FlowRegime, RawExperiment
+from Data.synthetic import (
     ALL_REGIMES,
     DEFAULT_SEED,
     generate_dataset,

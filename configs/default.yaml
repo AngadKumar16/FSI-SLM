@@ -19,20 +19,26 @@ dataset:
 
 # --- Training (MLX LoRA) ---
 training:
+  adapter_path: "artifacts/adapters"
+  dataset_dir: "artifacts/dataset"
+  checkpoint_dir: "artifacts/checkpoints"
+  resume_from_checkpoint: null
   batch_size: 4
   learning_rate: 2.0e-4
-  epochs: 3
+  epochs: 3           # converted to iters = ceil(N_train / batch_size) * epochs
+  iters: 0            # if > 0, overrides epochs-based computation
   lora_rank: 8
   lora_alpha: 16
   lora_dropout: 0.05
   max_seq_length: 2048
-  adapter_path: "artifacts/adapters"
-  checkpoint_dir: "artifacts/checkpoints"
-  resume_from_checkpoint: null
   grad_accum_steps: 2
-  warmup_steps: 50
-  save_every: 500
-  eval_every: 200
+  warmup_steps: 50    # linear warmup from 0 to learning_rate
+  save_every: 500     # checkpoint every N iters; final always saved
+  eval_every: 200     # validation every N iters
+  val_batches: 25     # -1 = use entire val set
+  mask_prompt: true   # if true, only the assistant response contributes to loss
+  grad_checkpoint: false  # trade compute for memory
+  num_layers: -1      # -1 = apply LoRA to all layers; N = last N only
 
 # --- RAG ---
 rag:

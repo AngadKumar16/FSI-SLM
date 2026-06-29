@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from data.schema import FeatureRecord
+from Data.schema import FeatureRecord
 
 logger = logging.getLogger(__name__)
 

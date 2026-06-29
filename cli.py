@@ -35,6 +35,13 @@ from typing import List, Optional
 
 import yaml
 
+# Ensure the project root is on sys.path so that ``Data`` (the package
+# directory) is importable when this file is invoked as ``python cli.py``
+# from any working directory.
+_PROJECT_ROOT = Path(__file__).resolve().parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from tools.utils.repro import set_seed
 
 
@@ -77,7 +84,7 @@ def generate_data(
     config_path : str
         Path to YAML configuration file.
     """
-    from data.synthetic import generate_dataset, DEFAULT_SEED
+    from Data.synthetic import generate_dataset, DEFAULT_SEED
 
     ctx = CLIContext.from_config_path(config_path)
     if seed is not None:
@@ -119,7 +126,7 @@ def build_dataset(
     config_path : str
         Path to YAML configuration file.
     """
-    from data.build_dataset import build_dataset as _build_dataset
+    from Data.build_dataset import build_dataset as _build_dataset
 
     ctx = CLIContext.from_config_path(config_path)
     if seed is not None:
@@ -216,11 +223,13 @@ def train(
     config = TrainingConfig(
         model_name=ctx.config.get("model_name", "microsoft/Phi-4-mini-instruct"),
         adapter_path=train_cfg.get("adapter_path", "artifacts/adapters"),
+        dataset_dir=train_cfg.get("dataset_dir", "artifacts/dataset"),
         checkpoint_dir=train_cfg.get("checkpoint_dir", "artifacts/checkpoints"),
         resume_from_checkpoint=train_cfg.get("resume_from_checkpoint", None),
         batch_size=train_cfg.get("batch_size", 4),
         learning_rate=train_cfg.get("learning_rate", 2.0e-4),
         epochs=train_cfg.get("epochs", 3),
+        iters=train_cfg.get("iters", 0),
         lora_rank=train_cfg.get("lora_rank", 8),
         lora_alpha=train_cfg.get("lora_alpha", 16.0),
         lora_dropout=train_cfg.get("lora_dropout", 0.05),
@@ -229,7 +238,11 @@ def train(
         warmup_steps=train_cfg.get("warmup_steps", 50),
         save_every=train_cfg.get("save_every", 500),
         eval_every=train_cfg.get("eval_every", 200),
+        val_batches=train_cfg.get("val_batches", 25),
         seed=ctx.seed,
+        mask_prompt=train_cfg.get("mask_prompt", True),
+        grad_checkpoint=train_cfg.get("grad_checkpoint", False),
+        num_layers=train_cfg.get("num_layers", -1),
     )
 
     _train(config)
@@ -252,7 +265,7 @@ def eval(
     # This function loads cached predictions if available, or generates them
     # using the trained model. For now, it loads the test set and runs the
     # rule-based evaluator as a sanity check.
-    from data.schema import FeatureRecord
+    from Data.schema import FeatureRecord
     from eval.evaluate import evaluate
 
     ctx = CLIContext.from_config_path(config_path)
@@ -273,7 +286,7 @@ def eval(
 
     # For now, use the deterministic describe() output as the "prediction"
     # (simulates perfect model). In production, this would run the trained model.
-    from data.describe import describe
+    from Data.describe import describe
 
     predictions = [describe(fr) for fr in test_records]
 
@@ -323,7 +336,7 @@ def infer(
     config_path : str
         Path to YAML configuration file.
     """
-    from data.schema import FeatureRecord
+    from Data.schema import FeatureRecord
     from train.tokenization.prompt_template import apply_chat_template, SYSTEM_PROMPT
 
     ctx = CLIContext.from_config_path(config_path)
@@ -369,7 +382,7 @@ def infer(
     print("-" * 60)
 
     # Note: actual model inference would go here using mlx_lm.generate
-    from data.describe import describe
+    from Data.describe import describe
     prediction = describe(fr)
     print("\n[cli] Prediction (rule-based fallback):")
     print(prediction)

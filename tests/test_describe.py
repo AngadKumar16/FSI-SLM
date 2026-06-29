@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from data.schema import (
+from Data.schema import (
     AmplitudeTrend,
     FeatureRecord,
     FlowConditions,
@@ -21,7 +21,7 @@ from data.schema import (
     PIVDerived,
     StructuralSignal,
 )
-from data.describe import (
+from Data.describe import (
     amplitude_trend,
     classify_regime,
     describe,
