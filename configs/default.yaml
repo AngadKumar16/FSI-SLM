@@ -1,0 +1,58 @@
+# FSI-SLM default configuration
+# All paths are relative to the project root.
+
+# --- Model ---
+model_name: "microsoft/Phi-4-mini-instruct"
+model_cache_dir: "artifacts/models"
+
+# --- Reproducibility ---
+seed: 42
+
+# --- Dataset ---
+dataset:
+  n_per_regime: 40
+  output_dir: "artifacts/dataset"
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  paraphrase: false
+
+# --- Training (MLX LoRA) ---
+training:
+  batch_size: 4
+  learning_rate: 2.0e-4
+  epochs: 3
+  lora_rank: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  max_seq_length: 2048
+  adapter_path: "artifacts/adapters"
+  checkpoint_dir: "artifacts/checkpoints"
+  resume_from_checkpoint: null
+  grad_accum_steps: 2
+  warmup_steps: 50
+  save_every: 500
+  eval_every: 200
+
+# --- RAG ---
+rag:
+  top_k: 3
+  index_type: "Flat"  # "Flat" or "IVF"
+  embedding_model: "all-MiniLM-L6-v2"
+  chunk_size: 256
+  chunk_overlap: 128
+  score_threshold: 0.3
+  corpus_dir: "Data/Papers"
+  index_dir: "artifacts/rag_index"
+
+# --- Evaluation ---
+eval:
+  freq_tolerance: 0.15
+  regime_f1_threshold: 0.5
+  output_dir: "artifacts/eval_results"
+
+# --- Serving ---
+serve:
+  host: "0.0.0.0"
+  port: 8000
+  max_retrieved: 5
