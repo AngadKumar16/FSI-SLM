@@ -98,9 +98,8 @@ def load_dataset(path: str, tokenizer) -> List[Dict]:
     list[dict]
         List of tokenized examples with keys ``input_ids`` and ``labels``.
     """
-    from mlx_lm.utils import load
-
     examples = []
+    max_seq_length = getattr(tokenizer, "max_seq_length", 2048)
     with open(path) as f:
         for line in f:
             data = json.loads(line)
@@ -110,8 +109,8 @@ def load_dataset(path: str, tokenizer) -> List[Dict]:
             # Tokenize
             tokens = tokenizer.encode(text)
             # Truncate to max_seq_length
-            if len(tokens) > tokenizer.max_seq_length:
-                tokens = tokens[: tokenizer.max_seq_length]
+            if len(tokens) > max_seq_length:
+                tokens = tokens[:max_seq_length]
             examples.append({"input_ids": tokens, "labels": tokens.copy()})
     return examples
 
@@ -135,7 +134,7 @@ def train(config: TrainingConfig) -> None:
     import mlx.nn as nn
     import mlx.optimizers as optim
     from mlx_lm.utils import load, save_config
-    from mlx_lm.tuner import LoRALinear, create_lora_parameters, linear_to_lora_layers
+    from mlx_lm.tuner import create_lora_parameters, linear_to_lora_layers
 
     from train.tokenization.prompt_template import SYSTEM_PROMPT, render_chat
 
@@ -194,7 +193,12 @@ def train(config: TrainingConfig) -> None:
     # ------------------------------------------------------------------ #
     # Optimizer and scheduler
     # ------------------------------------------------------------------ #
-    optimizer = optim.AdamW(learning_rate=config.learning_rate)
+    # Use a learning rate schedule with linear warmup
+    def lr_schedule(step: int) -> float:
+        scale = _linear_warmup(step, config.warmup_steps)
+        return config.learning_rate * scale
+
+    optimizer = optim.AdamW(learning_rate=lr_schedule(0))
 
     # ------------------------------------------------------------------ #
     # Training state
@@ -226,7 +230,7 @@ def train(config: TrainingConfig) -> None:
     # ------------------------------------------------------------------ #
     total_steps = len(train_examples) * config.epochs // config.batch_size
     accum_counter = 0
-    accum_loss = 0.0
+    accum_grads = None
 
     print(f"[train] Starting training for {config.epochs} epochs ({total_steps} steps)")
     print(f"[train] batch_size={config.batch_size}, grad_accum={config.grad_accum_steps}")
@@ -255,7 +259,6 @@ def train(config: TrainingConfig) -> None:
 
             padded_ids = []
             padded_labels = []
-            attention_masks = []
             for ids, labs in zip(batch_input_ids, batch_labels):
                 pad_len = max_len - len(ids)
                 if pad_len > 0:
@@ -269,9 +272,8 @@ def train(config: TrainingConfig) -> None:
             x = mx.array(padded_ids)
             y = mx.array(padded_labels)
 
-            # Forward pass
+            # Define loss function over trainable params
             def loss_fn(params):
-                nonlocal model
                 model.update(params)
                 logits = model(x)
                 # Cross-entropy loss
@@ -281,31 +283,46 @@ def train(config: TrainingConfig) -> None:
                 loss = nn.losses.cross_entropy(logits, targets, reduction="mean")
                 return loss
 
-            # Backward pass
-            loss, grads = nn.value_and_grad(model, loss_fn)(trainable_params)
-            accum_loss += loss.item()
+            # Compute loss and gradients
+            loss_and_grad_fn = nn.value_and_grad(loss_fn)
+            loss_val, grads = loss_and_grad_fn(trainable_params)
+
+            # Accumulate gradients
+            if accum_grads is None:
+                accum_grads = {k: v for k, v in grads.items()}
+            else:
+                for k in accum_grads:
+                    accum_grads[k] = accum_grads[k] + grads[k]
+
             accum_counter += 1
 
-            # Gradient accumulation
+            # Gradient accumulation step
             if accum_counter >= config.grad_accum_steps:
+                # Scale gradients by accumulation steps
+                for k in accum_grads:
+                    accum_grads[k] = accum_grads[k] / config.grad_accum_steps
+
+                # Update learning rate with warmup
+                lr = lr_schedule(global_step)
+                optimizer.learning_rate = mx.array(lr)
+
                 # Apply gradients
-                optimizer.update(model, grads)
+                optimizer.update(model, accum_grads)
                 mx.eval(model.parameters())
-                accum_loss = 0.0
+                mx.eval(optimizer.state)
+
+                # Reset accumulation
+                accum_grads = None
                 accum_counter = 0
                 global_step += 1
-
-                # Learning rate warmup
-                lr_scale = _linear_warmup(global_step, config.warmup_steps)
-                optimizer.learning_rate = mx.array(config.learning_rate * lr_scale)
 
                 # Logging
                 if global_step % 10 == 0:
                     print(
                         f"[train] Epoch {epoch + 1}/{config.epochs} | "
                         f"Step {global_step}/{total_steps} | "
-                        f"Loss: {loss.item():.4f} | "
-                        f"LR: {config.learning_rate * lr_scale:.2e}"
+                        f"Loss: {loss_val.item():.4f} | "
+                        f"LR: {lr:.2e}"
                     )
 
                 # Evaluation
