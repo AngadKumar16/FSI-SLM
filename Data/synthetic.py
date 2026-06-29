@@ -31,7 +31,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from data.schema import FlowConditions, FlowRegime, RawExperiment
+from Data.schema import FlowConditions, FlowRegime, RawExperiment
 
 # Global default; every public entry point also accepts an explicit seed.
 DEFAULT_SEED = 1234

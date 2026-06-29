@@ -52,12 +52,12 @@ _REGIME_PATTERN = re.compile(
 )
 
 _FREQ_PATTERN = re.compile(
-    r"dominant frequency of\s*([\d.]+)\s*Hz",
+    r"dominant frequency of\s*([\d]+(?:\.[\d]+)?)\s*Hz",
     re.IGNORECASE,
 )
 
 _STROUHAL_PATTERN = re.compile(
-    r"Strouhal number St\s*=\s*([\d.]+)",
+    r"Strouhal number St\s*=\s*([\d]+(?:\.[\d]+)?)",
     re.IGNORECASE,
 )
 
@@ -72,7 +72,7 @@ _AMPLITUDE_PATTERN = re.compile(
 )
 
 _NATURAL_FREQ_PATTERN = re.compile(
-    r"structural natural frequency\s*([\d.]+)\s*Hz",
+    r"structural natural frequency\s*([\d]+(?:\.[\d]+)?)\s*Hz",
     re.IGNORECASE,
 )
 
@@ -82,7 +82,7 @@ _MODE_PATTERN = re.compile(
 )
 
 _RMS_AMPLITUDE_PATTERN = re.compile(
-    r"RMS displacement\s*([\d.]+)c",
+    r"RMS displacement\s*([\d]+(?:\.[\d]+)?)c",
     re.IGNORECASE,
 )
 

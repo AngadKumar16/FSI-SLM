@@ -27,83 +27,25 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 
-from data.describe import describe
-from data.schema import FeatureRecord
-from data.synthetic import DEFAULT_SEED, generate_dataset
+from Data.describe import describe
+from Data.schema import FeatureRecord
+from Data.synthetic import DEFAULT_SEED, generate_dataset
 from features.extract import extract_features
-
-# --------------------------------------------------------------------------- #
-# Phi-4-mini-instruct prompt format
-# --------------------------------------------------------------------------- #
-# These tokens are part of Phi-4-mini-instruct's documented chat template. A turn
-# is "<|role|>" + content + "<|end|>". add_generation_prompt appends a bare
-# "<|assistant|>" to cue generation. Do NOT change these without re-checking the
-# model card -- the model is format-sensitive.
-PHI4_BOS = "<|endoftext|>"
-PHI4_END = "<|end|>"
-
-SYSTEM_PROMPT = (
-    "You are an expert in fluid-structure interaction (FSI) and aeroelasticity. "
-    "You are given a serialized feature record from a single airfoil/hydrofoil/"
-    "membrane experiment. The feature record is the ONLY source of truth for this "
-    "experiment's measured numbers. Interpret it and respond with a structured "
-    "description that states, in this order: (1) the flow regime "
-    "(attached, separated, VIV lock-in, galloping, or stall flutter); "
-    "(2) the dominant frequency in Hz and the Strouhal number St; "
-    "(3) the lock-in status (compare shedding frequency to the structural natural "
-    "frequency); (4) the amplitude trend; (5) the mode shape; and (6) a one-line "
-    "mechanism note. If reference passages from the literature are provided, you "
-    "may use them for domain grounding only -- never let them override the "
-    "experiment's own measured values."
+from train.tokenization.prompt_template import (
+    PHI4_BOS,
+    PHI4_END,
+    SYSTEM_PROMPT,
+    apply_chat_template,
+    render_chat,
 )
 
-
-def apply_phi4_chat_template(
-    system: str,
-    user: str,
-    assistant: Optional[str] = None,
-    add_generation_prompt: bool = False,
-) -> str:
-    """Hand-written Phi-4-mini chat template (offline fallback).
-
-    If ``assistant`` is provided, a full training string is returned (ending with
-    ``<|end|>``). If ``assistant`` is None and ``add_generation_prompt`` is True,
-    the string ends with a bare ``<|assistant|>`` ready for generation.
-    """
-    parts = [f"<|system|>{system}{PHI4_END}", f"<|user|>{user}{PHI4_END}"]
-    if assistant is not None:
-        parts.append(f"<|assistant|>{assistant}{PHI4_END}")
-    elif add_generation_prompt:
-        parts.append("<|assistant|>")
-    return "".join(parts)
-
-
-def render_chat(
-    system: str,
-    user: str,
-    assistant: Optional[str] = None,
-    add_generation_prompt: bool = False,
-    tokenizer=None,
-) -> str:
-    """Render a chat into a single string using the REAL tokenizer if given.
-
-    Prefers ``tokenizer.apply_chat_template`` (authoritative); otherwise uses the
-    documented offline fallback above.
-    """
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    if assistant is not None:
-        messages.append({"role": "assistant", "content": assistant})
-    if tokenizer is not None:
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=add_generation_prompt and assistant is None,
-        )
-    return apply_phi4_chat_template(system, user, assistant, add_generation_prompt)
+# Backwards-compatible alias: callers historically imported
+# ``apply_phi4_chat_template`` from this module.
+apply_phi4_chat_template = apply_chat_template
 
 
 # --------------------------------------------------------------------------- #

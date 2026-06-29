@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from data.schema import FeatureRecord, FlowRegime, ForceCoefficients, RawExperiment
+from Data.schema import FeatureRecord, FlowRegime, ForceCoefficients, RawExperiment
 from features.extract import (
     dominant_frequency,
     extract_features,
@@ -45,7 +45,7 @@ def _make_synthetic_raw(regime: FlowRegime = FlowRegime.ATTACHED) -> RawExperime
     n_points = 16
     snaps = np.random.default_rng(42).standard_normal((n_snaps, n_points)).tolist()
 
-    from data.schema import FlowConditions
+    from Data.schema import FlowConditions
 
     return RawExperiment(
         experiment_id=f"test-{regime.value}-00000",
