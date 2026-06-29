@@ -302,7 +302,7 @@ def evaluate(
         "num_parsed": len([p for p in parsed if p.get("regime")]),
         "regime_macro_f1": regime_f1,
         "lock_in_f1": lock_in_f1,
-        "regime_f1_threshold_met": regime_f1 >= config.get("regime_f1_threshold", 0.5),
+        "regime_f1_threshold_met": bool(regime_f1 >= config.get("regime_f1_threshold", 0.5)),
         "avg_field_accuracy": round(
             np.mean([v["accuracy"] for v in field_accuracy.values()]), 4
         ) if field_accuracy else 0.0,

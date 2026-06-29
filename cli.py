@@ -248,56 +248,123 @@ def train(
     _train(config)
 
 
+def _build_inference_config(ctx: "CLIContext"):
+    """Build an InferenceConfig from the CLI YAML config."""
+    from inference.runner import InferenceConfig
+
+    cfg = ctx.config.get("inference", {})
+    return InferenceConfig(
+        model_name=cfg.get("model_name", "./artifacts/models/Phi-4-mini-instruct"),
+        adapter_path=cfg.get("adapter_path", "artifacts/adapters"),
+        rag_index_dir=cfg.get("rag_index_dir", "artifacts/rag_index"),
+        max_tokens=cfg.get("max_tokens", 350),
+        temperature=cfg.get("temperature", 0.0),
+        top_p=cfg.get("top_p", 1.0),
+        top_k=cfg.get("rag_top_k", 3),
+        score_threshold=cfg.get("rag_score_threshold", 0.3),
+        seed=ctx.seed,
+    )
+
+
 def eval(
     config_path: str = "configs/default.yaml",
     output_file: Optional[str] = None,
+    use_model: bool = True,
+    use_rag: bool = False,
+    baseline: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> None:
-    """Evaluate the trained model on the held-out test set.
+    """Evaluate on the held-out test set.
 
-    Parameters
-    ----------
-    config_path : str
-        Path to YAML configuration file.
-    output_file : str, optional
-        Path to save evaluation results JSON.
+    Three modes:
+
+    - ``--baseline`` (default if no adapter exists): use the rule-based
+      ``Data/describe.py`` for every record. This is the perfect-oracle
+      baseline and lets you sanity-check the evaluator.
+    - ``--use-model`` (default when an adapter exists): load the trained
+      LoRA adapter and generate a prediction for every test record.
+    - ``--use-rag``: additionally retrieve top-k passages from the FAISS
+      index and inject them into the prompt (only meaningful with
+      ``--use-model``).
+
+    Results are written to ``artifacts/eval_results/eval_results.json``
+    (or ``--output-file``).
     """
-    # Note: full evaluation requires a trained model to generate predictions.
-    # This function loads cached predictions if available, or generates them
-    # using the trained model. For now, it loads the test set and runs the
-    # rule-based evaluator as a sanity check.
     from Data.schema import FeatureRecord
     from eval.evaluate import evaluate
 
     ctx = CLIContext.from_config_path(config_path)
     eval_cfg = ctx.config.get("eval", {})
 
-    # Load test feature records
+    # Load test set
     test_path = Path("artifacts/dataset/feature_records_test.jsonl")
     if not test_path.exists():
         print(f"[cli] Test set not found at {test_path}. Run 'build-dataset' first.")
         return
 
-    test_records = []
+    test_records: List[FeatureRecord] = []
     with test_path.open() as f:
         for line in f:
             test_records.append(FeatureRecord.model_validate_json(line))
 
     print(f"[cli] Loaded {len(test_records)} test records")
 
-    # For now, use the deterministic describe() output as the "prediction"
-    # (simulates perfect model). In production, this would run the trained model.
-    from Data.describe import describe
+    # Decide which predictor to use
+    predictions: List[str]
+    predictor_name: str
 
-    predictions = [describe(fr) for fr in test_records]
+    adapter_exists = (
+        ctx.config.get("inference", {}).get("adapter_path")
+        and Path(
+            ctx.config["inference"]["adapter_path"], "adapters.safetensors"
+        ).exists()
+    )
 
+    if baseline or (not use_model) or (not adapter_exists and not baseline):
+        if not adapter_exists and use_model and not baseline:
+            print(
+                "[cli] No adapter found at "
+                f"{ctx.config.get('inference', {}).get('adapter_path')}. "
+                "Falling back to rule-based describe()."
+            )
+        from Data.describe import describe
+
+        predictions = [describe(fr) for fr in test_records]
+        predictor_name = "rule-based"
+    else:
+        from inference.runner import InferenceRunner
+
+        inf_cfg = _build_inference_config(ctx)
+        if max_tokens is not None:
+            inf_cfg.max_tokens = max_tokens
+        print(
+            f"[cli] Evaluating with trained model "
+            f"(adapter={inf_cfg.adapter_path}, RAG={use_rag}, "
+            f"max_tokens={inf_cfg.max_tokens})..."
+        )
+        with InferenceRunner(inf_cfg) as runner:
+            predictions = runner.generate_batch(
+                test_records, use_rag=use_rag, show_progress=True
+            )
+        predictor_name = (
+            f"trained-model+adapter({'rag' if use_rag else 'no-rag'})"
+        )
+
+    print(f"[cli] Running metrics on {len(predictions)} predictions from {predictor_name}")
     results = evaluate(
         predictions=predictions,
         test_dataset=test_records,
         config=eval_cfg,
     )
+    results["meta"] = {
+        "predictor": predictor_name,
+        "num_records": len(test_records),
+        "config_path": config_path,
+    }
 
     # Print summary
     print("\n[cli] Evaluation Results:")
+    print(f"  Predictor: {predictor_name}")
     print(f"  Examples: {results['summary']['num_examples']}")
     print(f"  Regime Macro F1: {results['summary']['regime_macro_f1']:.4f}")
     print(f"  Lock-in F1: {results['summary']['lock_in_f1']:.4f}")
@@ -306,7 +373,10 @@ def eval(
     if results["per_field_accuracy"]:
         print("\n  Per-Field Accuracy:")
         for field, metrics in results["per_field_accuracy"].items():
-            print(f"    {field}: {metrics['accuracy']:.2%} ({metrics['correct']}/{metrics['total']})")
+            print(
+                f"    {field}: {metrics['accuracy']:.2%} "
+                f"({metrics['correct']}/{metrics['total']})"
+            )
 
     # Save results
     if output_file:
@@ -323,8 +393,11 @@ def eval(
 def infer(
     feature_record: str,
     use_rag: bool = False,
+    use_model: bool = True,
+    baseline: bool = False,
     config_path: str = "configs/default.yaml",
-) -> None:
+    max_tokens: Optional[int] = None,
+) -> str:
     """Run inference on a single FeatureRecord.
 
     Parameters
@@ -333,11 +406,22 @@ def infer(
         Path to a JSON file containing a FeatureRecord, or a JSON string.
     use_rag : bool
         Whether to use RAG augmentation (default: False).
+    use_model : bool
+        Use the trained LoRA adapter (default: True). Ignored if ``--baseline``
+        is set.
+    baseline : bool
+        Force the rule-based ``Data/describe.py`` instead of the trained model.
     config_path : str
         Path to YAML configuration file.
+    max_tokens : int, optional
+        Override ``inference.max_tokens`` from the config.
+
+    Returns
+    -------
+    str
+        The interpretation text. Also prints to stdout for human inspection.
     """
     from Data.schema import FeatureRecord
-    from train.tokenization.prompt_template import apply_chat_template, SYSTEM_PROMPT
 
     ctx = CLIContext.from_config_path(config_path)
 
@@ -350,42 +434,57 @@ def infer(
 
     fr = FeatureRecord.model_validate(data)
 
-    if use_rag:
-        # Load RAG index and retrieve
-        try:
-            from rag.index import load_index
-            from rag.retrieve import build_query, retrieve
-            from rag.prompt_assembly import assemble_rag_prompt
+    # Decide which predictor
+    adapter_path = ctx.config.get("inference", {}).get("adapter_path")
+    adapter_exists = (
+        adapter_path and Path(adapter_path, "adapters.safetensors").exists()
+    )
 
-            rag_cfg = ctx.config.get("rag", {})
-            index, metadata, model = load_index(rag_cfg.get("index_dir", "artifacts/rag_index"))
-            query = build_query(fr)
-            retrieved = retrieve(
-                query=query,
-                index=index,
-                metadata=metadata,
-                model=model,
-                top_k=rag_cfg.get("top_k", 3),
-                score_threshold=rag_cfg.get("score_threshold", 0.3),
+    if baseline or (not use_model) or (not adapter_exists):
+        if not adapter_exists and use_model and not baseline:
+            print(
+                f"[cli] No adapter found at {adapter_path}; falling back to "
+                "rule-based describe()."
             )
-            prompt = assemble_rag_prompt(fr, retrieved)
-            print(f"[cli] RAG: retrieved {len(retrieved)} passages")
-        except (FileNotFoundError, ImportError) as e:
-            print(f"[cli] RAG unavailable (run 'index-corpus' first): {e}")
-            prompt = apply_chat_template(SYSTEM_PROMPT, fr.to_prompt_block(), add_generation_prompt=True)
+        from Data.describe import describe
+
+        prediction = describe(fr)
+        predictor_name = "rule-based"
     else:
-        prompt = apply_chat_template(SYSTEM_PROMPT, fr.to_prompt_block(), add_generation_prompt=True)
+        from inference.runner import InferenceRunner
 
-    print("\n[cli] Prompt:")
-    print("-" * 60)
-    print(prompt)
-    print("-" * 60)
+        inf_cfg = _build_inference_config(ctx)
+        if max_tokens is not None:
+            inf_cfg.max_tokens = max_tokens
+        with InferenceRunner(inf_cfg) as runner:
+            if use_rag:
+                retrieved = runner.retrieve(fr)
+                prompt = runner.build_prompt(fr, retrieved=retrieved)
+                print(f"[cli] RAG: retrieved {len(retrieved)} passages")
+            else:
+                prompt = runner.build_prompt(fr)
+            print("\n[cli] Prompt:")
+            print("-" * 60)
+            print(prompt)
+            print("-" * 60)
+            print("\n[cli] Generating...")
+            prediction = runner.generate(fr, use_rag=use_rag, max_tokens=max_tokens)
+        predictor_name = f"trained-model+adapter({'rag' if use_rag else 'no-rag'})"
 
-    # Note: actual model inference would go here using mlx_lm.generate
-    from Data.describe import describe
-    prediction = describe(fr)
-    print("\n[cli] Prediction (rule-based fallback):")
+    print(f"\n[cli] Prediction ({predictor_name}):")
     print(prediction)
+
+    # Validate against expected format
+    from eval.validate_output import validate_output
+
+    result = validate_output(prediction)
+    print(f"\n[cli] Validator: valid={result.valid}")
+    if result.errors:
+        print(f"  errors:   {result.errors}")
+    if result.warnings:
+        print(f"  warnings: {result.warnings}")
+
+    return prediction
 
 
 def serve(

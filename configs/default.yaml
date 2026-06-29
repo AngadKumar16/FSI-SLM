@@ -62,3 +62,15 @@ serve:
   host: "0.0.0.0"
   port: 8000
   max_retrieved: 5
+
+# --- Inference (shared by cli:infer, cli:eval, serve:infer) ---
+inference:
+  model_name: "./artifacts/models/Phi-4-mini-instruct"
+  adapter_path: "artifacts/adapters"   # set to null to use base model only
+  rag_index_dir: "artifacts/rag_index"
+  max_tokens: 350
+  temperature: 0.0
+  top_p: 1.0
+  rag_top_k: 3
+  rag_score_threshold: 0.3
+  seed: 42
