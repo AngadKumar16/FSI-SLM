@@ -10,3 +10,30 @@ Data/Papers/
 # model outputs
 checkpoints/
 runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# MLX / Metal cache
+.mlx_cache/
+
+# Hugging Face
+.cache/
