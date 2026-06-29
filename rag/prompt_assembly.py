@@ -18,6 +18,36 @@ from rag.retrieve import RetrievalResult
 from train.tokenization.prompt_template import SYSTEM_PROMPT, apply_chat_template
 
 
+def _format_passages(retrieved: List[RetrievalResult]) -> str:
+    """Format a list of retrieved passages as a reference block.
+
+    This is the same format used inside :func:`assemble_rag_prompt`, exposed
+    as a separate helper so training code can build SFT examples that look
+    identical to inference-time prompts.
+
+    Parameters
+    ----------
+    retrieved : list[RetrievalResult]
+        Passages returned by :func:`rag.retrieve.retrieve`.
+
+    Returns
+    -------
+    str
+        A multi-line string starting with ``[REFERENCE PASSAGES]`` and
+        ending with ``[/REFERENCE PASSAGES]``, or ``""`` if no passages.
+    """
+    if not retrieved:
+        return ""
+    lines = ["", "[REFERENCE PASSAGES]"]
+    for i, r in enumerate(retrieved):
+        lines.append(
+            f"--- Passage {i + 1} (source: {r.source}, score: {r.score:.3f}) ---"
+        )
+        lines.append(r.passage_text)
+    lines.append("[/REFERENCE PASSAGES]")
+    return "\n".join(lines)
+
+
 def assemble_rag_prompt(
     feature_record: FeatureRecord,
     retrieved: List[RetrievalResult],
@@ -51,15 +81,9 @@ def assemble_rag_prompt(
     # Build the user message content
     user_parts = [feature_record.to_prompt_block()]
 
-    if retrieved:
-        ref_lines = ["", "[REFERENCE PASSAGES]"]
-        for i, r in enumerate(retrieved):
-            ref_lines.append(
-                f"--- Passage {i + 1} (source: {r.source}, score: {r.score:.3f}) ---"
-            )
-            ref_lines.append(r.passage_text)
-        ref_lines.append("[/REFERENCE PASSAGES]")
-        user_parts.append("\n".join(ref_lines))
+    ref_block = _format_passages(retrieved)
+    if ref_block:
+        user_parts.append(ref_block)
 
     user_parts.append(
         "\n\nBased on the feature record above, provide a structured interpretation "

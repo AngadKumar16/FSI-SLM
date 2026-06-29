@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -83,6 +83,51 @@ def build_example(fr: FeatureRecord, tokenizer=None, paraphrase: bool = False) -
     )
 
 
+def build_rag_example(
+    fr: FeatureRecord,
+    retrieved: list,
+    tokenizer=None,
+    paraphrase: bool = False,
+) -> SFTExample:
+    """Build a SFT example that includes retrieved paper passages.
+
+    The user message is augmented with a ``[REFERENCE PASSAGES]`` block
+    formatted the same way ``rag.prompt_assembly.assemble_rag_prompt``
+    does, so the model sees the same prompt format it will encounter at
+    inference time. This teaches the model to ground its answers in
+    papers without overriding the experiment's own numbers.
+
+    Parameters
+    ----------
+    fr : FeatureRecord
+        The experiment.
+    retrieved : list[RetrievalResult]
+        Pre-retrieved passages from the FAISS index.
+    tokenizer : optional
+        Tokenizer for the chat template.
+    paraphrase : bool
+        Whether to paraphrase the assistant target.
+
+    Returns
+    -------
+    SFTExample
+    """
+    from rag.prompt_assembly import _format_passages
+
+    base_user = fr.to_prompt_block()
+    ref_block = _format_passages(retrieved) if retrieved else ""
+    user = f"{base_user}\n\n{ref_block}" if ref_block else base_user
+    assistant = describe(fr, paraphrase_with_api=paraphrase)
+    text = render_chat(SYSTEM_PROMPT, user, assistant, tokenizer=tokenizer)
+    return SFTExample(
+        experiment_id=fr.experiment_id,
+        system=SYSTEM_PROMPT,
+        user=user,
+        assistant=assistant,
+        text=text,
+    )
+
+
 def split_by_experiment(
     feature_records: List[FeatureRecord],
     ratios: Tuple[float, float, float] = (0.8, 0.1, 0.1),
@@ -117,12 +162,33 @@ def build_dataset(
     ratios: Tuple[float, float, float] = (0.8, 0.1, 0.1),
     paraphrase: bool = False,
     tokenizer=None,
+    rag_index_dir: Optional[str] = None,
+    rag_top_k: int = 3,
+    rag_score_threshold: float = 0.3,
+    rag_fraction: float = 0.0,
 ) -> Dict[str, Path]:
     """Generate synthetic data, extract features, build examples, split, and write.
 
-    Writes ``{train,val,test}.jsonl`` plus ``feature_records_{split}.jsonl`` (the
-    raw feature records with ground truth, used by the evaluator). Returns a map of
-    split -> path for the chat JSONL files.
+    With ``rag_fraction > 0``, a fraction of training examples (rounded) will
+    have retrieved paper passages added to the user message -- the rest stay
+    in the original no-RAG format. This trains the model to use retrieved
+    context when present and ignore it when not.
+
+    Writes ``{train,val,test}.jsonl`` plus ``feature_records_{split}.jsonl``
+    (the raw feature records with ground truth, used by the evaluator).
+    Returns a map of split -> path for the chat JSONL files.
+
+    Parameters
+    ----------
+    rag_index_dir : str, optional
+        Path to a FAISS index directory. Required when ``rag_fraction > 0``.
+    rag_top_k : int
+        Number of passages to retrieve per RAG example.
+    rag_score_threshold : float
+        Minimum similarity score for a retrieved passage.
+    rag_fraction : float
+        Fraction in [0, 1] of training examples that should be augmented with
+        retrieved passages. Default 0 (no RAG).
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -131,15 +197,61 @@ def build_dataset(
     feature_records = [extract_features(r) for r in raw_experiments]
     buckets = split_by_experiment(feature_records, ratios=ratios, seed=seed)
 
+    # Lazy RAG setup
+    rag_index = rag_metadata = rag_model = None
+    if rag_fraction > 0:
+        if not rag_index_dir:
+            raise ValueError("rag_index_dir is required when rag_fraction > 0")
+        from rag.index import load_index
+        from rag.retrieve import build_query, retrieve
+
+        rag_index, rag_metadata, rag_model = load_index(rag_index_dir)
+        print(f"[build_dataset] RAG: loaded index from {rag_index_dir}")
+
     paths: Dict[str, Path] = {}
     for split, records in buckets.items():
         chat_path = out / f"{split}.jsonl"
         feat_path = out / f"feature_records_{split}.jsonl"
+
+        # Decide which records in this split get RAG passages.
+        # Apply the fraction only to the training split; val/test stay no-RAG
+        # so eval can compare fairly.
+        if split == "train" and rag_fraction > 0 and rag_index is not None:
+            n_rag = max(1, int(round(len(records) * rag_fraction)))
+            rag_indices = set(range(n_rag))  # first n_rag are RAG-augmented
+            print(
+                f"[build_dataset] {split}: {n_rag}/{len(records)} examples will "
+                f"include RAG passages"
+            )
+        else:
+            rag_indices = set()
+
         with chat_path.open("w") as cf, feat_path.open("w") as ff:
-            for fr in records:
-                ex = build_example(fr, tokenizer=tokenizer, paraphrase=paraphrase)
-                cf.write(json.dumps(ex.to_json()) + "\n")
+            for i, fr in enumerate(records):
                 ff.write(fr.model_dump_json() + "\n")
+                if i in rag_indices:
+                    from rag.retrieve import build_query, retrieve
+                    retrieved = retrieve(
+                        query=build_query(fr),
+                        index=rag_index,
+                        metadata=rag_metadata,
+                        model=rag_model,
+                        top_k=rag_top_k,
+                        score_threshold=rag_score_threshold,
+                    )
+                    if retrieved:
+                        ex = build_rag_example(
+                            fr, retrieved, tokenizer=tokenizer, paraphrase=paraphrase
+                        )
+                    else:
+                        ex = build_example(
+                            fr, tokenizer=tokenizer, paraphrase=paraphrase
+                        )
+                else:
+                    ex = build_example(
+                        fr, tokenizer=tokenizer, paraphrase=paraphrase
+                    )
+                cf.write(json.dumps(ex.to_json()) + "\n")
         paths[split] = chat_path
         print(f"[build_dataset] {split}: {len(records)} examples -> {chat_path}")
     return paths
