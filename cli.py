@@ -112,6 +112,10 @@ def build_dataset(
     seed: Optional[int] = None,
     output_dir: str = "artifacts/dataset",
     config_path: str = "configs/default.yaml",
+    rag_index_dir: Optional[str] = None,
+    rag_fraction: float = 0.0,
+    rag_top_k: int = 3,
+    rag_score_threshold: float = 0.3,
 ) -> None:
     """Build SFT dataset from synthetic data.
 
@@ -125,6 +129,17 @@ def build_dataset(
         Output directory for the dataset.
     config_path : str
         Path to YAML configuration file.
+    rag_index_dir : str, optional
+        Path to a FAISS index (e.g. ``artifacts/rag_index``). When provided
+        together with ``rag_fraction > 0``, a fraction of training examples
+        will be augmented with retrieved passages.
+    rag_fraction : float
+        Fraction in [0, 1] of training examples to augment with RAG.
+        Default 0 (no RAG).
+    rag_top_k : int
+        Number of passages to retrieve per RAG example.
+    rag_score_threshold : float
+        Minimum similarity score for a retrieved passage.
     """
     from Data.build_dataset import build_dataset as _build_dataset
 
@@ -148,6 +163,10 @@ def build_dataset(
         seed=ctx.seed,
         ratios=ratios,
         paraphrase=paraphrase,
+        rag_index_dir=rag_index_dir,
+        rag_fraction=rag_fraction,
+        rag_top_k=rag_top_k,
+        rag_score_threshold=rag_score_threshold,
     )
     print(f"[cli] Dataset built: {len(paths)} splits")
     for split, path in paths.items():
