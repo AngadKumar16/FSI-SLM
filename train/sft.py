@@ -103,6 +103,10 @@ class TrainingConfig:
     num_layers : int
         Number of transformer layers (counting from the last) to apply LoRA
         to. ``-1`` means all layers.
+    clear_cache_threshold : int
+        Free the Metal allocator cache between iterations when its size
+        exceeds this many bytes. ``0`` disables. Try ~1 GB
+        (``1073741824``) if you hit OOM with longer sequences.
     """
 
     model_name: str = "microsoft/Phi-4-mini-instruct"
