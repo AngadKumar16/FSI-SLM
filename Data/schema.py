@@ -146,6 +146,50 @@ class FlowConditions(BaseModel):
     )
 
 
+class ModalDamping(BaseModel):
+    """Structural modal damping characteristics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    damping_ratio: float = Field(
+        ...,
+        description="Logarithmic decrement-derived damping ratio ζ (dimensionless). "
+        "Valid range [0.0, 0.5]; typical FSI structures 0.01-0.1.",
+    )
+    q_factor: float = Field(
+        ...,
+        description="Quality factor Q = 1/(2ζ) of the structural mode. "
+        "Valid range [1.0, 500.0]; higher Q = lower damping.",
+    )
+
+
+class StructuralSpectrum(BaseModel):
+    """Frequency-domain descriptors of the structural response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spectral_bandwidth_hz: float = Field(
+        ...,
+        description="Half-power bandwidth of the dominant structural peak in HERTZ. "
+        "Indicates damping and coherence. Valid range [0.0, 100.0].",
+    )
+    spectral_kurtosis: float = Field(
+        ...,
+        description="Kurtosis of the structural displacement spectrum (dimensionless). "
+        "Valid range [-1.0, 10.0]; higher values indicate non-sinusoidal response.",
+    )
+    skewness: float = Field(
+        ...,
+        description="Skewness of the structural displacement time series. "
+        "Valid range [-3.0, 3.0]; zero for symmetric oscillation.",
+    )
+    kurtosis: float = Field(
+        ...,
+        description="Kurtosis of the structural displacement time series. "
+        "Valid range [-1.0, 10.0]; >3 indicates intermittent/impacting behavior.",
+    )
+
+
 class StructuralSignal(BaseModel):
     """Foil/membrane displacement response."""
 
@@ -175,6 +219,14 @@ class StructuralSignal(BaseModel):
         ...,
         description="Mean camber as a fraction of chord (max-camber/chord), "
         "dimensionless. Valid range [0.0, 0.25] (membranes inflate to high camber).",
+    )
+    damping: Optional[ModalDamping] = Field(
+        default=None,
+        description="Modal damping characteristics if estimated from signal.",
+    )
+    spectrum: Optional[StructuralSpectrum] = Field(
+        default=None,
+        description="Frequency-domain and higher-order structural descriptors.",
     )
 
 
@@ -207,6 +259,30 @@ class ForceCoefficients(BaseModel):
     cm_mean: float = Field(..., description="Mean pitching-moment coefficient (dimensionless). Range [-1.5, 1.5].")
     cm_rms: float = Field(..., description="RMS of moment-coefficient fluctuation (dimensionless). Range [0, 1.5].")
     cm_dominant_frequency_hz: float = Field(..., description="Dominant frequency of Cm(t) in HERTZ. Range [0, 1000].")
+
+
+class AerodynamicCoherence(BaseModel):
+    """Cross-spectral coherence between structural motion and aerodynamic forces."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cl_coherence_peak: float = Field(
+        ...,
+        description="Peak coherence between structural displacement and lift coefficient "
+        "at the dominant frequency (dimensionless). Valid range [0.0, 1.0]; "
+        "~1 indicates phase-locked energy transfer.",
+    )
+    cd_coherence_peak: float = Field(
+        ...,
+        description="Peak coherence between structural displacement and drag coefficient "
+        "(dimensionless). Valid range [0.0, 1.0].",
+    )
+    phase_angle_deg: float = Field(
+        ...,
+        description="Phase angle between structural displacement and lift at the "
+        "dominant frequency in DEGREES. Valid range [-180, 180]; "
+        "~90° indicates maximum energy transfer in VIV.",
+    )
 
 
 class PIVDerived(BaseModel):
@@ -244,6 +320,11 @@ class PIVDerived(BaseModel):
         ...,
         description="Wake turbulent kinetic energy TKE = 0.5*<u'^2+v'^2+w'^2>, "
         "non-dimensionalized by U^2 (so dimensionless). Valid range [0.0, 0.5].",
+    )
+    coherence: Optional[AerodynamicCoherence] = Field(
+        default=None,
+        description="Cross-spectral coherence between structural motion and "
+        "aerodynamic forces, indicating energy transfer strength.",
     )
 
 
@@ -294,6 +375,16 @@ class RawExperiment(BaseModel):
     natural_frequency_hz: float = Field(..., description="Structural natural frequency f_n in HERTZ.")
     mode_number: int = Field(..., description="Dominant structural mode number.")
     camber: float = Field(..., description="Mean camber fraction of chord.")
+    youngs_modulus_pa: Optional[float] = Field(
+        default=None,
+        description="Young's modulus E in PASCALS (for material property tracking). "
+        "Valid range [1e3, 1e12] for typical structural materials.",
+    )
+    density_kg_m3: Optional[float] = Field(
+        default=None,
+        description="Material density ρ in KG/M^3. Valid range [1.0, 20000.0] "
+        "(aluminum ~2700, steel ~7850).",
+    )
 
     # Scalar PIV summaries that are measured, not FFT-derived.
     wake_width_over_c: float = Field(..., description="Wake width normalized by chord.")
@@ -334,6 +425,16 @@ class FeatureRecord(BaseModel):
     piv: PIVDerived
     structure: StructuralSignal
     forces: ForceCoefficients
+    classification_confidence: Optional[float] = Field(
+        default=None,
+        description="Confidence score [0.0, 1.0] for the regime classification. "
+        "Higher values indicate clearer decision boundaries.",
+    )
+    supporting_features: Optional[dict] = Field(
+        default=None,
+        description="Feature importance weights used in classification decision "
+        "(interpretability aid). Keys: feature names, values: normalized weights.",
+    )
 
     # Ground truth carried only for synthetic data / evaluation. Never serialized
     # into the model input (see to_prompt_block). None for real experiments.
@@ -400,6 +501,26 @@ class FeatureRecord(BaseModel):
             f"natural_frequency_hz: {s.natural_frequency_hz:.4g}",
             f"mode_number: {s.mode_number}",
             f"camber: {s.camber:.4f}",
+        ]
+        if s.damping is not None:
+            lines.extend([
+                f"damping_ratio: {s.damping.damping_ratio:.4f}",
+                f"q_factor: {s.damping.q_factor:.2f}",
+            ])
+        if s.spectrum is not None:
+            lines.extend([
+                f"spectral_bandwidth_hz: {s.spectrum.spectral_bandwidth_hz:.4g}",
+                f"spectral_kurtosis: {s.spectrum.spectral_kurtosis:.3f}",
+                f"skewness: {s.spectrum.skewness:.3f}",
+                f"kurtosis: {s.spectrum.kurtosis:.3f}",
+            ])
+        if p.coherence is not None:
+            lines.extend([
+                f"cl_coherence_peak: {p.coherence.cl_coherence_peak:.4f}",
+                f"cd_coherence_peak: {p.coherence.cd_coherence_peak:.4f}",
+                f"phase_angle_deg: {p.coherence.phase_angle_deg:.1f}",
+            ])
+        lines.extend([
             "[forces]",
             f"cl_mean: {f.cl_mean:.4f}",
             f"cl_rms: {f.cl_rms:.4f}",
@@ -410,7 +531,9 @@ class FeatureRecord(BaseModel):
             f"cm_mean: {f.cm_mean:.4f}",
             f"cm_rms: {f.cm_rms:.4f}",
             f"cm_dominant_frequency_hz: {f.cm_dominant_frequency_hz:.4g}",
-        ]
+        ])
+        if self.classification_confidence is not None:
+            lines.append(f"classification_confidence: {self.classification_confidence:.3f}")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ #
@@ -441,6 +564,20 @@ class FeatureRecord(BaseModel):
         chk("rms_amplitude_over_c", s.rms_amplitude_over_c, 0.0, 1.0)
         chk("mode_number", s.mode_number, 1, 6)
         chk("camber", s.camber, 0.0, 0.25)
+        if s.damping is not None:
+            chk("damping_ratio", s.damping.damping_ratio, 0.0, 0.5)
+            chk("q_factor", s.damping.q_factor, 1.0, 500.0)
+        if s.spectrum is not None:
+            chk("spectral_bandwidth_hz", s.spectrum.spectral_bandwidth_hz, 0.0, 100.0)
+            chk("spectral_kurtosis", s.spectrum.spectral_kurtosis, -1.0, 10.0)
+            chk("skewness", s.spectrum.skewness, -3.0, 3.0)
+            chk("kurtosis", s.spectrum.kurtosis, -1.0, 10.0)
+        if p.coherence is not None:
+            chk("cl_coherence_peak", p.coherence.cl_coherence_peak, 0.0, 1.0)
+            chk("cd_coherence_peak", p.coherence.cd_coherence_peak, 0.0, 1.0)
+            chk("phase_angle_deg", p.coherence.phase_angle_deg, -180.0, 180.0)
+        if self.classification_confidence is not None:
+            chk("classification_confidence", self.classification_confidence, 0.0, 1.0)
         return warns
 
 
@@ -457,7 +594,10 @@ __all__ = [
     "LockInStatus",
     "AmplitudeTrend",
     "FlowConditions",
+    "ModalDamping",
+    "StructuralSpectrum",
     "StructuralSignal",
+    "AerodynamicCoherence",
     "ForceCoefficients",
     "PIVDerived",
     "RawExperiment",

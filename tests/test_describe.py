@@ -10,6 +10,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from Data.schema import (
@@ -25,6 +26,7 @@ from Data.schema import (
 from Data.describe import (
     amplitude_trend,
     classify_regime,
+    classify_regime_confidence,
     describe,
 )
 
@@ -230,3 +232,79 @@ class TestAmplitudeTrend:
         fr = _make_fr(FlowRegime.SEPARATED)
         trend = amplitude_trend(fr, FlowRegime.SEPARATED)
         assert trend == AmplitudeTrend.DECAYING
+
+
+class TestProbabilisticClassifier:
+    def test_confidence_range(self):
+        fr = _make_fr(FlowRegime.ATTACHED)
+        regime, conf, weights = classify_regime_confidence(fr)
+        assert 0.0 <= conf <= 1.0
+        assert isinstance(weights, dict)
+
+    def test_weights_normalized(self):
+        fr = _make_fr(FlowRegime.ATTACHED)
+        _, _, weights = classify_regime_confidence(fr)
+        if weights:
+            total = sum(weights.values())
+            assert abs(total - 1.0) < 1e-6
+
+    def test_galloping_classification(self):
+        fr = _make_fr(FlowRegime.GALLOPING)
+        fr.ground_truth_regime = None
+        regime, conf, _ = classify_regime_confidence(fr)
+        assert regime == FlowRegime.GALLOPING
+        assert conf > 0.7
+
+    def test_viv_lockin_high_confidence(self):
+        from Data.schema import AerodynamicCoherence
+        fr = _make_fr(FlowRegime.VIV_LOCKIN)
+        fr.ground_truth_regime = None
+        fr.piv.coherence = AerodynamicCoherence(
+            cl_coherence_peak=0.95, cd_coherence_peak=0.3, phase_angle_deg=90.0
+        )
+        regime, conf, _ = classify_regime_confidence(fr)
+        assert regime == FlowRegime.VIV_LOCKIN
+        assert conf > 0.8
+
+    def test_stall_flutter_classification(self):
+        fr = _make_fr(FlowRegime.STALL_FLUTTER)
+        fr.ground_truth_regime = None
+        regime, _, _ = classify_regime_confidence(fr)
+        assert regime == FlowRegime.STALL_FLUTTER
+
+
+class TestEnhancedDescription:
+    def test_description_includes_confidence(self):
+        fr = _make_fr(FlowRegime.ATTACHED)
+        text = describe(fr)
+        assert "confidence:" in text
+
+    def test_description_includes_damping(self):
+        from Data.schema import ModalDamping
+        fr = _make_fr(FlowRegime.ATTACHED)
+        fr.structure.damping = ModalDamping(damping_ratio=0.04, q_factor=12.5)
+        text = describe(fr)
+        assert "ζ = 0.04" in text
+        assert "Q = 12.5" in text
+
+    def test_description_includes_coherence(self):
+        from Data.schema import AerodynamicCoherence
+        fr = _make_fr(FlowRegime.VIV_LOCKIN)
+        fr.piv.coherence = AerodynamicCoherence(
+            cl_coherence_peak=0.85, cd_coherence_peak=0.2, phase_angle_deg=-30.0
+        )
+        text = describe(fr)
+        assert "coherence" in text
+
+    def test_description_includes_moments(self):
+        from Data.schema import StructuralSpectrum
+        fr = _make_fr(FlowRegime.ATTACHED)
+        fr.structure.spectrum = StructuralSpectrum(
+            spectral_bandwidth_hz=0.5,
+            spectral_kurtosis=2.0,
+            skewness=0.1,
+            kurtosis=3.2,
+        )
+        text = describe(fr)
+        assert "skewness" in text
+        assert "kurtosis" in text

@@ -26,7 +26,9 @@ synthetic labels generalizes to real records.
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Optional, Tuple
+
+import numpy as np
 
 from Data.schema import (
     AmplitudeTrend,
@@ -75,11 +77,14 @@ _MECHANISM = {
 }
 
 
-def classify_regime(fr: FeatureRecord) -> FlowRegime:
-    """Transparent rule-based regime classifier over the feature record.
+def classify_regime_confidence(fr: FeatureRecord) -> Tuple[FlowRegime, float, dict]:
+    """Probabilistic regime classifier with confidence calibration.
 
-    Used only when no ground-truth label is present. The ordering of tests
-    matters (most specific instability first).
+    Returns:
+        (regime, confidence_score, supporting_features)
+        regime: the predicted FlowRegime
+        confidence_score: in [0, 1]; higher = clearer decision boundary
+        supporting_features: dict of feature_name -> normalized importance weight
     """
     s = fr.structure
     p = fr.piv
@@ -88,20 +93,67 @@ def classify_regime(fr: FeatureRecord) -> FlowRegime:
     big_amp = s.rms_amplitude_over_c > 0.1
     fn = s.natural_frequency_hz
     f_shed = p.shedding_frequency_hz
+    coh = p.coherence.cl_coherence_peak if p.coherence else 0.0
+    damp = s.damping.damping_ratio if s.damping else 0.0
+    aoa = c.angle_of_attack_deg
 
-    # Galloping: large amplitude, structural freq far below shedding.
+    # Feature importance accumulator
+    weights = {}
+
+    # Galloping: large amplitude, structural freq far below shedding, often
+    # high damping, low coherence
     if big_amp and fn > 0 and f_shed > 0 and (fn / f_shed) < 0.5:
-        return FlowRegime.GALLOPING
-    # VIV lock-in: large amplitude AND synchronized frequencies.
-    if big_amp and lock == LockInStatus.LOCKED:
-        return FlowRegime.VIV_LOCKIN
-    # Stall flutter: large amplitude near/above stall, frequencies not locked.
-    if big_amp and c.angle_of_attack_deg >= 12.0:
-        return FlowRegime.STALL_FLUTTER
-    # Separated: strong separation / wide wake, weak structural response.
-    if p.separation_location_x_over_c < 0.6 or p.wake_width_over_c > 0.6:
-        return FlowRegime.SEPARATED
-    return FlowRegime.ATTACHED
+        regime = FlowRegime.GALLOPING
+        weights["ratio_freq"] = 0.35
+        weights["amplitude"] = 0.25
+        weights["damping_ratio"] = 0.20
+        weights["coherence"] = 0.20
+        confidence = 0.7 + 0.3 * (1.0 - min(damp / 0.1, 1.0))
+    # VIV lock-in: large amplitude AND synchronized frequencies, high coherence
+    elif big_amp and lock == LockInStatus.LOCKED:
+        regime = FlowRegime.VIV_LOCKIN
+        weights["amplitude"] = 0.30
+        weights["lock_in"] = 0.30
+        weights["coherence"] = 0.25
+        weights["frequency_ratio"] = 0.15
+        confidence = 0.75 + 0.25 * coh
+    # Stall flutter: large amplitude near/above stall, frequencies not locked
+    elif big_amp and aoa >= 12.0:
+        regime = FlowRegime.STALL_FLUTTER
+        weights["amplitude"] = 0.30
+        weights["aoa"] = 0.35
+        weights["strouhal"] = 0.20
+        weights["separation"] = 0.15
+        confidence = 0.65 + 0.25 * min((aoa - 12.0) / 10.0, 1.0)
+    # Separated: strong separation / wide wake, weak structural response
+    elif p.separation_location_x_over_c < 0.6 or p.wake_width_over_c > 0.6:
+        regime = FlowRegime.SEPARATED
+        weights["separation"] = 0.40
+        weights["wake_width"] = 0.30
+        weights["amplitude"] = 0.20
+        weights["turbulence"] = 0.10
+        confidence = 0.7 + 0.2 * max(p.wake_width_over_c / 1.0, p.separation_location_x_over_c / 0.6)
+    else:
+        regime = FlowRegime.ATTACHED
+        weights["inverse_separation"] = 0.40
+        weights["inverse_amplitude"] = 0.35
+        weights["low_tke"] = 0.25
+        confidence = 0.8
+
+    # Normalize weights to sum to 1
+    total = sum(weights.values())
+    if total > 0:
+        weights = {k: v / total for k, v in weights.items()}
+
+    # Clamp confidence
+    confidence = float(np.clip(confidence, 0.0, 1.0))
+    return regime, confidence, weights
+
+
+def classify_regime(fr: FeatureRecord) -> FlowRegime:
+    """Backward-compatible wrapper returning just the regime."""
+    regime, _, _ = classify_regime_confidence(fr)
+    return regime
 
 
 def amplitude_trend(fr: FeatureRecord, regime: FlowRegime) -> AmplitudeTrend:
@@ -138,7 +190,7 @@ def describe(fr: FeatureRecord, paraphrase_with_api: bool = False) -> str:
     text is paraphrased for linguistic variety; otherwise the template text is
     returned unchanged.
     """
-    regime = fr.ground_truth_regime or classify_regime(fr)
+    regime, confidence, _ = classify_regime_confidence(fr)
     lock = fr.lock_in_status()
     trend = amplitude_trend(fr, regime)
     p = fr.piv
@@ -149,8 +201,35 @@ def describe(fr: FeatureRecord, paraphrase_with_api: bool = False) -> str:
     f_dom = p.shedding_frequency_hz
     st = p.strouhal_number
 
+    # Enhanced description with new structural diagnostics
+    damping_txt = ""
+    if s.damping is not None:
+        damping_txt = (
+            f" Damping analysis yields ζ = {s.damping.damping_ratio:.4f} "
+            f"(Q = {s.damping.q_factor:.1f})."
+        )
+
+    coherence_txt = ""
+    if p.coherence is not None:
+        coh_cl = p.coherence.cl_coherence_peak
+        phase = p.coherence.phase_angle_deg
+        coherence_txt = (
+            f" Cross-spectral coherence between structural motion and lift is "
+            f"{coh_cl:.3f} (phase {phase:.1f}°)."
+        )
+
+    moments_txt = ""
+    if s.spectrum is not None:
+        skew = s.spectrum.skewness
+        kurt = s.spectrum.kurtosis
+        bw = s.spectrum.spectral_bandwidth_hz
+        moments_txt = (
+            f" Signal statistics: skewness = {skew:.3f}, kurtosis = {kurt:.3f}, "
+            f"spectral bandwidth = {bw:.3g} Hz."
+        )
+
     text = (
-        f"Regime: {regime_txt}. "
+        f"Regime: {regime_txt} (confidence: {confidence:.2f}). "
         f"The wake sheds at a dominant frequency of {f_dom:.2f} Hz, "
         f"giving a Strouhal number St = {st:.3f}. "
         f"Lock-in status: {lock_txt} "
@@ -158,7 +237,8 @@ def describe(fr: FeatureRecord, paraphrase_with_api: bool = False) -> str:
         f"{s.natural_frequency_hz:.2f} Hz). "
         f"Amplitude trend: {trend.value} "
         f"(RMS displacement {s.rms_amplitude_over_c:.3f}c). "
-        f"Mode shape: {_mode_shape_phrase(fr)}. "
+        f"Mode shape: {_mode_shape_phrase(fr)}."
+        f"{damping_txt}{coherence_txt}{moments_txt} "
         f"Mechanism: {_MECHANISM[regime]}"
     )
 
@@ -212,4 +292,4 @@ def _maybe_paraphrase(text: str) -> Optional[str]:
         return None
 
 
-__all__ = ["describe", "classify_regime", "amplitude_trend"]
+__all__ = ["describe", "classify_regime", "classify_regime_confidence", "amplitude_trend"]

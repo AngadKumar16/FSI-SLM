@@ -168,3 +168,135 @@ class TestEnums:
         assert AmplitudeTrend.SATURATED.value == "saturated"
         assert AmplitudeTrend.DECAYING.value == "decaying"
         assert AmplitudeTrend.NEGLIGIBLE.value == "negligible"
+
+
+class TestExtendedSchema:
+    def test_modal_damping_construction(self):
+        from Data.schema import ModalDamping
+        md = ModalDamping(damping_ratio=0.05, q_factor=10.0)
+        assert md.damping_ratio == 0.05
+        assert md.q_factor == 10.0
+
+    def test_structural_spectrum_construction(self):
+        from Data.schema import StructuralSpectrum
+        ss = StructuralSpectrum(
+            spectral_bandwidth_hz=0.5,
+            spectral_kurtosis=1.0,
+            skewness=0.1,
+            kurtosis=2.5,
+        )
+        assert ss.spectral_bandwidth_hz == 0.5
+        assert ss.skewness == 0.1
+
+    def test_feature_record_with_damping(self):
+        from Data.schema import ModalDamping
+        fr = _make_minimal_fr()
+        fr.structure.damping = ModalDamping(damping_ratio=0.03, q_factor=16.7)
+        assert fr.structure.damping.damping_ratio == 0.03
+
+    def test_feature_record_with_spectrum(self):
+        from Data.schema import StructuralSpectrum
+        fr = _make_minimal_fr()
+        fr.structure.spectrum = StructuralSpectrum(
+            spectral_bandwidth_hz=0.2,
+            spectral_kurtosis=2.0,
+            skewness=0.05,
+            kurtosis=3.1,
+        )
+        assert fr.structure.spectrum.spectral_bandwidth_hz == 0.2
+
+    def test_aerodynamic_coherence_construction(self):
+        from Data.schema import AerodynamicCoherence
+        ac = AerodynamicCoherence(
+            cl_coherence_peak=0.85,
+            cd_coherence_peak=0.2,
+            phase_angle_deg=95.0,
+        )
+        assert ac.cl_coherence_peak == 0.85
+        assert abs(ac.phase_angle_deg - 95.0) < 1e-6
+
+    def test_feature_record_with_coherence(self):
+        from Data.schema import AerodynamicCoherence
+        fr = _make_minimal_fr()
+        fr.piv.coherence = AerodynamicCoherence(
+            cl_coherence_peak=0.9,
+            cd_coherence_peak=0.3,
+            phase_angle_deg=88.0,
+        )
+        assert fr.piv.coherence.cl_coherence_peak == 0.9
+
+    def test_feature_record_with_confidence(self):
+        fr = _make_minimal_fr()
+        fr.classification_confidence = 0.85
+        assert fr.classification_confidence == 0.85
+
+    def test_feature_record_with_supporting_features(self):
+        fr = _make_minimal_fr()
+        fr.supporting_features = {"amplitude": 0.35, "coherence": 0.25}
+        assert fr.supporting_features["amplitude"] == 0.35
+
+    def test_enhanced_range_warnings_damping(self):
+        from Data.schema import ModalDamping
+        fr = _make_minimal_fr()
+        fr.structure.damping = ModalDamping(damping_ratio=0.8, q_factor=0.5)
+        warns = fr.range_warnings()
+        assert any("damping_ratio" in w for w in warns)
+        assert any("q_factor" in w for w in warns)
+
+    def test_enhanced_range_warnings_coherence(self):
+        from Data.schema import AerodynamicCoherence
+        fr = _make_minimal_fr()
+        fr.piv.coherence = AerodynamicCoherence(
+            cl_coherence_peak=1.5,
+            cd_coherence_peak=0.5,
+            phase_angle_deg=200.0,
+        )
+        warns = fr.range_warnings()
+        assert any("cl_coherence_peak" in w for w in warns)
+        assert any("phase_angle_deg" in w for w in warns)
+
+    def test_enhanced_range_warnings_confidence(self):
+        fr = _make_minimal_fr()
+        fr.classification_confidence = -0.5
+        warns = fr.range_warnings()
+        assert any("classification_confidence" in w for w in warns)
+
+    def test_to_prompt_block_includes_damping(self):
+        from Data.schema import ModalDamping
+        fr = _make_minimal_fr()
+        fr.structure.damping = ModalDamping(damping_ratio=0.04, q_factor=12.5)
+        block = fr.to_prompt_block()
+        assert "damping_ratio" in block
+        assert "q_factor" in block
+
+    def test_to_prompt_block_includes_spectrum(self):
+        from Data.schema import StructuralSpectrum
+        fr = _make_minimal_fr()
+        fr.structure.spectrum = StructuralSpectrum(
+            spectral_bandwidth_hz=0.3,
+            spectral_kurtosis=2.0,
+            skewness=0.1,
+            kurtosis=3.2,
+        )
+        block = fr.to_prompt_block()
+        assert "spectral_bandwidth_hz" in block
+        assert "kurtosis" in block
+
+    def test_to_prompt_block_includes_coherence(self):
+        from Data.schema import AerodynamicCoherence
+        fr = _make_minimal_fr()
+        fr.piv.coherence = AerodynamicCoherence(
+            cl_coherence_peak=0.8,
+            cd_coherence_peak=0.2,
+            phase_angle_deg=-45.0,
+        )
+        block = fr.to_prompt_block()
+        assert "cl_coherence_peak" in block
+        assert "phase_angle_deg" in block
+
+    def test_to_prompt_block_includes_confidence(self):
+        fr = _make_minimal_fr()
+        fr.classification_confidence = 0.92
+        block = fr.to_prompt_block()
+        assert "classification_confidence" in block
+        assert "0.92" in block
