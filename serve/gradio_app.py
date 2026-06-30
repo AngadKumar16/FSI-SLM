@@ -24,7 +24,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 
-from Data.schema import FeatureRecord, RawExperiment
+from Data.describe import (
+    classify_regime,
+    describe as _describe_fn,
+)
+from Data.schema import (
+    FlowRegime,
+    FeatureRecord,
+    RawExperiment,
+)
 from features.extract import extract_features
 
 
@@ -204,24 +212,57 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             )
         return fr.model_dump(mode="json"), fr.model_dump(mode="json"), _record_status(fr)
 
+    def _structured_breakdown(fr: FeatureRecord) -> str:
+        """Build a rich markdown summary of the 6 interpretation parts."""
+        regime = fr.ground_truth_regime or classify_regime(fr)
+        lock = fr.lock_in_status()
+        from Data.describe import amplitude_trend, _LOCKIN_PHRASE, _MECHANISM, _REGIME_PHRASE, _mode_shape_phrase
+
+        trend = amplitude_trend(fr, regime)
+        p = fr.piv
+        s = fr.structure
+
+        md = "## Structured Breakdown\n\n"
+
+        md += "### Key Metrics\n\n"
+        md += "| Metric | Value |\n|---|---|\n"
+        md += f"| Shedding frequency | {p.shedding_frequency_hz:.2f} Hz |\n"
+        md += f"| Strouhal number St | {p.strouhal_number:.3f} |\n"
+        md += f"| Structural natural freq | {s.natural_frequency_hz:.2f} Hz |\n"
+        md += f"| RMS amplitude (a/c) | {s.rms_amplitude_over_c:.4f}c |\n"
+        md += f"| Mode number | {int(s.mode_number)} |\n"
+        md += f"| Lock-in status | {_LOCKIN_PHRASE[lock]} |\n"
+        md += f"| Amplitude trend | {trend.value} |\n\n"
+
+        md += "### The 6-Part Interpretation\n\n"
+        md += f"1. **Regime:** {_REGIME_PHRASE[regime]}\n"
+        md += f"2. **Frequency/St:** Dominant shedding at {p.shedding_frequency_hz:.2f} Hz "
+        md += f"(St = {p.strouhal_number:.3f})\n"
+        md += f"3. **Lock-in:** {_LOCKIN_PHRASE[lock]} "
+        md += f"(shedding {p.shedding_frequency_hz:.2f} Hz vs natural {s.natural_frequency_hz:.2f} Hz)\n"
+        md += f"4. **Amplitude trend:** {trend.value} "
+        md += f"(RMS displacement {s.rms_amplitude_over_c:.4f}c)\n"
+        md += f"5. **Mode shape:** {_mode_shape_phrase(fr)}\n"
+        md += f"6. **Mechanism:** {_MECHANISM[regime]}\n"
+
+        return md
+
     def interpret(fr_dict, use_rag):
         if not fr_dict:
             return "Provide FSI data first (tab 1), then interpret.", ""
         fr = FeatureRecord.model_validate(fr_dict)
+        breakdown = _structured_breakdown(fr)
 
         if not _has_trained_model():
-            from Data.describe import describe
-
-            return (
-                "**(rule-based fallback — no trained adapter found)**\n\n"
-                + describe(fr),
-                "",
-            )
+            raw_text = _describe_fn(fr)
+            full_md = breakdown + "\n\n---\n\n### Raw Rule-Based Output\n\n" + raw_text.replace("\n", "  \n")
+            return full_md, ""
 
         runner = _get_runner()
         retrieved = runner.retrieve(fr) if use_rag else []
-        text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
-        return text, _passages_markdown(retrieved)
+        raw_text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
+        full_md = breakdown + "\n\n---\n\n### Model Output\n\n" + raw_text.replace("\n", "  \n")
+        return full_md, _passages_markdown(retrieved)
 
     def ask(fr_dict, question, use_rag, history, chat):
         history = history or []
@@ -345,7 +386,7 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         with gr.Tab("2 · Structured interpretation"):
             use_rag_struct = gr.Checkbox(label="Use RAG (retrieve literature passages)", value=False)
             interpret_btn = gr.Button("Interpret record", variant="primary")
-            interp_out = gr.Textbox(label="Structured interpretation", lines=10)
+            interp_out = gr.Markdown(label="Structured interpretation")
             interp_passages = gr.Markdown()
 
         # ---- Tab 3: free-text Q&A ---- #
