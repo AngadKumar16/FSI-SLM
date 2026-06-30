@@ -386,20 +386,22 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
 
     def interpret(fr_dict, use_rag):
         if not fr_dict:
-            return "Provide FSI data first (tab 1), then interpret.", "", ""
+            return "Provide FSI data first (tab 1), then interpret.", "", "", ""
         fr = FeatureRecord.model_validate(fr_dict)
         summary, warnings, details = _structured_breakdown(fr)
 
         if not _has_trained_model():
             raw_text = _describe_fn(fr)
             full_md = details + "\n\n---\n\n### Raw Rule-Based Output\n\n" + raw_text.replace("\n", "  \n")
-            return summary, warnings, full_md
+            passages_md = _passages_markdown([])
+            return summary, warnings, full_md, passages_md
 
         runner = _get_runner()
         retrieved = runner.retrieve(fr) if use_rag else []
         raw_text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
+        passages_md = _passages_markdown(retrieved)
         full_md = details + "\n\n---\n\n### Model Output\n\n" + raw_text.replace("\n", "  \n")
-        return summary, warnings, full_md
+        return summary, warnings, full_md, passages_md
 
     def ask(fr_dict, question, use_rag, history, chat):
         history = history or []
