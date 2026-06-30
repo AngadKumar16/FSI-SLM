@@ -1,0 +1,76 @@
+# FSI-SLM default configuration
+# All paths are relative to the project root.
+
+# --- Model ---
+model_name: "microsoft/Phi-4-mini-instruct"
+model_cache_dir: "artifacts/models"
+
+# --- Reproducibility ---
+seed: 42
+
+# --- Dataset ---
+dataset:
+  n_per_regime: 40
+  output_dir: "artifacts/dataset"
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  paraphrase: false
+
+# --- Training (MLX LoRA) ---
+training:
+  adapter_path: "artifacts/adapters"
+  dataset_dir: "artifacts/dataset"
+  checkpoint_dir: "artifacts/checkpoints"
+  resume_from_checkpoint: null
+  batch_size: 4
+  learning_rate: 2.0e-4
+  epochs: 3           # converted to iters = ceil(N_train / batch_size) * epochs
+  iters: 0            # if > 0, overrides epochs-based computation
+  lora_rank: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  max_seq_length: 2048
+  grad_accum_steps: 2
+  warmup_steps: 50    # linear warmup from 0 to learning_rate
+  save_every: 500     # checkpoint every N iters; final always saved
+  eval_every: 200     # validation every N iters
+  val_batches: 25     # -1 = use entire val set
+  mask_prompt: true   # if true, only the assistant response contributes to loss
+  grad_checkpoint: false  # trade compute for memory
+  num_layers: -1      # -1 = apply LoRA to all layers; N = last N only
+
+# --- RAG ---
+rag:
+  top_k: 3
+  index_type: "Flat"  # "Flat" or "IVF"
+  embedding_model: "all-MiniLM-L6-v2"
+  chunk_size: 256
+  chunk_overlap: 128
+  score_threshold: 0.3
+  corpus_dir: "Data/Papers"
+  index_dir: "artifacts/rag_index"
+
+# --- Evaluation ---
+eval:
+  freq_tolerance: 0.15
+  regime_f1_threshold: 0.5
+  output_dir: "artifacts/eval_results"
+
+# --- Serving ---
+serve:
+  host: "0.0.0.0"
+  port: 8000
+  max_retrieved: 5
+
+# --- Inference (shared by cli:infer, cli:eval, serve:infer) ---
+inference:
+  model_name: "./artifacts/models/Phi-4-mini-instruct"
+  adapter_path: "artifacts/adapters"   # set to null to use base model only
+  rag_index_dir: "artifacts/rag_index"
+  max_tokens: 350
+  temperature: 0.0
+  top_p: 1.0
+  rag_top_k: 3
+  rag_score_threshold: 0.3
+  seed: 42

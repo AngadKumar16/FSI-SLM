@@ -4,10 +4,10 @@ artifacts/
 *.faiss
 *.jsonl
 
-# datasets
+# Datasets (PDFs are content, not source -- tracked nowhere)
 Data/Papers/
 
-# model outputs
+# Model outputs / checkpoints
 checkpoints/
 runs/
 
