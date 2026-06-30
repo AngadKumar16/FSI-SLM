@@ -36,4 +36,4 @@ env/
 .mlx_cache/
 
 # Hugging Face
-.cache/
+.cache/.DS_Store
