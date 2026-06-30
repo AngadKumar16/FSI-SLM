@@ -131,6 +131,7 @@ class TrainingConfig:
     mask_prompt: bool = True
     grad_checkpoint: bool = False
     num_layers: int = -1  # -1 = all layers
+    clear_cache_threshold: int = 0  # bytes; free Metal cache when exceeded. 0 disables.
 
 
 # --------------------------------------------------------------------------- #
@@ -288,7 +289,7 @@ def _build_lora_args(config: TrainingConfig):
         max_seq_length=config.max_seq_length,
         grad_accumulation_steps=config.grad_accum_steps,
         grad_checkpoint=config.grad_checkpoint,
-        clear_cache_threshold=0,
+        clear_cache_threshold=config.clear_cache_threshold,
         # Logging / saving
         steps_per_report=10,
         steps_per_eval=config.eval_every,

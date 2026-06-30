@@ -116,6 +116,7 @@ def build_dataset(
     rag_fraction: float = 0.0,
     rag_top_k: int = 3,
     rag_score_threshold: float = 0.3,
+    rag_max_passage_chars: int = 600,
 ) -> None:
     """Build SFT dataset from synthetic data.
 
@@ -167,6 +168,7 @@ def build_dataset(
         rag_fraction=rag_fraction,
         rag_top_k=rag_top_k,
         rag_score_threshold=rag_score_threshold,
+        rag_max_passage_chars=rag_max_passage_chars,
     )
     print(f"[cli] Dataset built: {len(paths)} splits")
     for split, path in paths.items():

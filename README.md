@@ -1,5 +1,4 @@
 # FSI-SLM: Fluid-Structure Interaction Interpretation via Small Language Models
-
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Apple Silicon](https://img.shields.io/badge/platform-Apple%20Silicon-orange)](https://www.apple.com/mac/)
 
@@ -10,6 +9,11 @@ The system generates synthetic training data with physically-consistent coupling
 ---
 
 ## Architecture
+
+For a detailed end-to-end workflow diagram see:
+
+- **[docs/workflow.md](docs/workflow.md)** — Mermaid diagrams (Renders in GitHub, GitLab, VSCode)
+- **[docs/workflow.txt](docs/workflow.txt)** — ASCII for terminal viewing
 
 ```
 ┌─────────────────┐     ┌───────────────────┐     ┌─────────────────┐

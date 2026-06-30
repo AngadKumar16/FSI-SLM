@@ -88,6 +88,7 @@ def build_rag_example(
     retrieved: list,
     tokenizer=None,
     paraphrase: bool = False,
+    max_passage_chars: Optional[int] = 600,
 ) -> SFTExample:
     """Build a SFT example that includes retrieved paper passages.
 
@@ -107,15 +108,29 @@ def build_rag_example(
         Tokenizer for the chat template.
     paraphrase : bool
         Whether to paraphrase the assistant target.
+    max_passage_chars : int, optional
+        Cap each retrieved passage to this many characters before formatting.
+        Keeps the whole training example within ``max_seq_length`` so we
+        don't lose the assistant target to truncation. ``None`` disables.
 
     Returns
     -------
     SFTExample
     """
+    import dataclasses
     from rag.prompt_assembly import _format_passages
 
     base_user = fr.to_prompt_block()
-    ref_block = _format_passages(retrieved) if retrieved else ""
+    if max_passage_chars is None:
+        truncated = retrieved
+    else:
+        truncated = []
+        for r in retrieved:
+            text = r.passage_text or ""
+            if len(text) > max_passage_chars:
+                text = text[:max_passage_chars].rsplit(" ", 1)[0] + "..."
+            truncated.append(dataclasses.replace(r, passage_text=text))
+    ref_block = _format_passages(truncated) if truncated else ""
     user = f"{base_user}\n\n{ref_block}" if ref_block else base_user
     assistant = describe(fr, paraphrase_with_api=paraphrase)
     text = render_chat(SYSTEM_PROMPT, user, assistant, tokenizer=tokenizer)
@@ -166,6 +181,7 @@ def build_dataset(
     rag_top_k: int = 3,
     rag_score_threshold: float = 0.3,
     rag_fraction: float = 0.0,
+    rag_max_passage_chars: Optional[int] = 600,
 ) -> Dict[str, Path]:
     """Generate synthetic data, extract features, build examples, split, and write.
 
@@ -189,6 +205,10 @@ def build_dataset(
     rag_fraction : float
         Fraction in [0, 1] of training examples that should be augmented with
         retrieved passages. Default 0 (no RAG).
+    rag_max_passage_chars : int, optional
+        Cap each retrieved passage to this many characters before formatting.
+        Keeps the training example within ``max_seq_length`` so we don't lose
+        the assistant target to truncation.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -241,7 +261,8 @@ def build_dataset(
                     )
                     if retrieved:
                         ex = build_rag_example(
-                            fr, retrieved, tokenizer=tokenizer, paraphrase=paraphrase
+                            fr, retrieved, tokenizer=tokenizer, paraphrase=paraphrase,
+                            max_passage_chars=rag_max_passage_chars,
                         )
                     else:
                         ex = build_example(
