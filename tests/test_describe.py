@@ -19,6 +19,7 @@ from Data.schema import (
     FlowRegime,
     ForceCoefficients,
     PIVDerived,
+    PressureStrain,
     StructuralSignal,
 )
 from Data.describe import (
@@ -38,6 +39,10 @@ def _make_fr(regime: FlowRegime = FlowRegime.ATTACHED) -> FeatureRecord:
             freestream_velocity_m_s=1.0,
             reduced_velocity=6.0,
             chord_m=0.1,
+        ),
+        "pressure_strain": PressureStrain(
+            pressure=101325.0,
+            strain=0.01,
         ),
         "forces": ForceCoefficients(
             cl_mean=0.5, cl_rms=0.02, cl_dominant_frequency_hz=10.0,

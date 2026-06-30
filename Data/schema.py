@@ -178,6 +178,21 @@ class StructuralSignal(BaseModel):
     )
 
 
+class PressureStrain(BaseModel):
+    """Pressure and strain measurements from the experiment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pressure: float = Field(
+        ...,
+        description="Ambient pressure in Pa. Valid range [0, 500000].",
+    )
+    strain: float = Field(
+        ...,
+        description="Strain (dimensionless or engineering strain). Valid range [0, 10].",
+    )
+
+
 class ForceCoefficients(BaseModel):
     """Mean / RMS and dominant frequency of the aerodynamic force coefficients."""
 
@@ -285,6 +300,10 @@ class RawExperiment(BaseModel):
     separation_location_x_over_c: float = Field(..., description="Separation point x/c (0=LE,1=TE).")
     turbulent_kinetic_energy: float = Field(..., description="Wake TKE / U^2 (dimensionless).")
 
+    # Pressure and strain measurements.
+    pressure: float = Field(default=101325.0, description="Ambient pressure in Pa. Default = standard atmospheric pressure.")
+    strain: float = Field(default=0.0, description="Strain (dimensionless or engineering strain). Default = 0.")
+
     # Optional ground-truth label carried alongside synthetic data ONLY. Real
     # experiments leave this None; it is never an input to the model.
     ground_truth_regime: Optional[FlowRegime] = Field(
@@ -311,6 +330,7 @@ class FeatureRecord(BaseModel):
 
     experiment_id: str
     conditions: FlowConditions
+    pressure_strain: PressureStrain
     piv: PIVDerived
     structure: StructuralSignal
     forces: ForceCoefficients

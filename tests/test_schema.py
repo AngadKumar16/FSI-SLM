@@ -20,6 +20,7 @@ from Data.schema import (
     ForceCoefficients,
     LockInStatus,
     PIVDerived,
+    PressureStrain,
     StructuralSignal,
 )
 
@@ -36,6 +37,10 @@ def _make_minimal_fr(
             freestream_velocity_m_s=1.0,
             reduced_velocity=6.0,
             chord_m=0.1,
+        ),
+        pressure_strain=PressureStrain(
+            pressure=101325.0,
+            strain=0.01,
         ),
         piv=PIVDerived(
             shedding_frequency_hz=10.0,
