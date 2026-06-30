@@ -28,6 +28,7 @@ from Data.schema import (
     FeatureRecord,
     ForceCoefficients,
     PIVDerived,
+    PressureStrain,
     RawExperiment,
     StructuralSignal,
     snapshots_to_array,
@@ -132,6 +133,10 @@ def extract_features(raw: RawExperiment) -> FeatureRecord:
     return FeatureRecord(
         experiment_id=raw.experiment_id,
         conditions=c,
+        pressure_strain=PressureStrain(
+            pressure=raw.pressure,
+            strain=raw.strain,
+        ),
         piv=piv,
         structure=structure,
         forces=forces,

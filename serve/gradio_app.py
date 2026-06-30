@@ -60,6 +60,8 @@ def feature_record_from_form(
     separation_location_x_over_c: float,
     pod_mode_amplitudes: str,
     turbulent_kinetic_energy: float,
+    pressure: float,
+    strain: float,
     rms_amplitude_over_c: float,
     dominant_frequency_hz: float,
     natural_frequency_hz: float,
@@ -85,6 +87,10 @@ def feature_record_from_form(
                 "freestream_velocity_m_s": freestream_velocity_m_s,
                 "reduced_velocity": reduced_velocity,
                 "chord_m": chord_m,
+            },
+            "pressure_strain": {
+                "pressure": pressure,
+                "strain": strain,
             },
             "piv": {
                 "shedding_frequency_hz": shedding_frequency_hz,
@@ -461,8 +467,8 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
                     strain = gr.Slider(label="Strain", minimum=0, maximum=10, value=0.01)
                 gr.Markdown("**Example Inputs**")
                 examples = [
-                    ["Pressure: 101325, Strain: 0.01"],
-                    ["Pressure: 50000, Strain: 0.005"],
+                    [101325, 0.01],
+                    [50000, 0.005],
                 ]
                 gr.Examples(examples=examples, inputs=[pressure, strain], label="Select Example Data")
                 
@@ -551,6 +557,7 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             reduced_velocity, chord_m,
             shedding_frequency_hz, strouhal_number, wake_width_over_c,
             separation_location_x_over_c, pod_mode_amplitudes, turbulent_kinetic_energy,
+            pressure, strain,
             rms_amplitude_over_c, dominant_frequency_hz, natural_frequency_hz,
             mode_number, camber,
             cl_mean, cl_rms, cl_dominant_frequency_hz,
