@@ -623,7 +623,6 @@ def ui(
     ctx = CLIContext.from_config_path(config_path)
     demo = create_ui(config=ctx.config)
     demo.launch(server_name=host, server_port=port, share=share)
-demo.launch(server_name=host, server_port=port, share=True)
 
 def main() -> None:
     """Main entry point - dispatches to subcommands via fire.Fire."""
