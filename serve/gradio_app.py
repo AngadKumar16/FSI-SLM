@@ -283,22 +283,21 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
                     freestream_velocity_m_s = gr.Number(label="freestream_velocity_m_s", value=2.0)
                     reduced_velocity = gr.Number(label="reduced_velocity (U*)", value=6.0)
                     chord_m = gr.Number(label="chord_m", value=0.1)
-                 gr.Markdown("**Pressure & Strain**")
-                 with gr.Row():
-                     pressure = gr.Slider(label="Pressure (Pa)", minimum=0, maximum=200000, value=101325)
-                     strain = gr.Slider(label="Strain", minimum=0, maximum=10, value=0.01)
-                 gr.Markdown("**Example Inputs**")
-                 examples = [
-                     ["Pressure: 101325, Strain: 0.01"],
-                     ["Pressure: 50000, Strain: 0.005"],
-                 ]
-                 gr.Examples(examples=examples, inputs=[pressure, strain], label="Select Example Data")
+                gr.Markdown("**Pressure & Strain**")
+                with gr.Row():
+                    pressure = gr.Slider(label="Pressure (Pa)", minimum=0, maximum=200000, value=101325)
+                    strain = gr.Slider(label="Strain", minimum=0, maximum=10, value=0.01)
+                gr.Markdown("**Example Inputs**")
+                examples = [
+                    ["Pressure: 101325, Strain: 0.01"],
+                    ["Pressure: 50000, Strain: 0.005"],
+                ]
+                gr.Examples(examples=examples, inputs=[pressure, strain], label="Select Example Data")
                 
-                 gr.Markdown("**PIV-derived**")
-                 with gr.Row():
-                     shedding_frequency_hz = gr.Number(label="shedding_frequency_hz", value=12.0)
-                     strouhal_number = gr.Number(label="strouhal_number", value=0.6)
                 gr.Markdown("**PIV-derived**")
+                with gr.Row():
+                    shedding_frequency_hz = gr.Number(label="shedding_frequency_hz", value=12.0)
+                    strouhal_number = gr.Number(label="strouhal_number", value=0.6)
                 with gr.Row():
                     shedding_frequency_hz = gr.Number(label="shedding_frequency_hz", value=12.0)
                     strouhal_number = gr.Number(label="strouhal_number", value=0.6)
