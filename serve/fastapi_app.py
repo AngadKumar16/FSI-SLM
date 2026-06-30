@@ -2,9 +2,11 @@
 
 Endpoints
 ---------
-- ``GET  /health``  -- health check.
-- ``GET  /schema``  -- FeatureRecord JSON schema.
-- ``POST /infer``   -- run inference on a FeatureRecord, optionally with RAG.
+- ``GET  /health``        -- health check (model state, RAG state, load time).
+- ``GET  /schema``        -- FeatureRecord JSON schema.
+- ``POST /infer``         -- run inference on a FeatureRecord (single response).
+- ``POST /infer/stream``  -- Server-Sent Events streaming inference.
+- ``GET  /ready``         -- 200 once the model is loaded, 503 otherwise.
 
 The inference backend is a single :class:`inference.runner.InferenceRunner`
 shared by ``cli.py:infer`` and ``cli.py:eval``. The server can run in three
@@ -19,6 +21,7 @@ modes:
 
 Usage
 -----
+
 ::
 
     # Start the server (uses artifacts/adapters/ + artifacts/rag_index/)
@@ -31,21 +34,35 @@ Usage
     curl -X POST http://localhost:8000/infer \\
         -H "Content-Type: application/json" \\
         -d '{"feature_record": {...}, "use_rag": false}'
+
+    # Stream tokens
+    curl -N -X POST http://localhost:8000/infer/stream \\
+        -H "Content-Type: application/json" \\
+        -d '{"feature_record": {...}, "use_rag": false}'
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from Data.schema import FeatureRecord
 
-logger = logging.getLogger(__name__)
+# ----------------------------------------------------------------- #
+# Logging
+# ----------------------------------------------------------------- #
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("fsi.server")
 
 
 # --------------------------------------------------------------------------- #
@@ -56,6 +73,7 @@ class InferRequest(BaseModel):
     feature_record: dict = Field(..., description="A FeatureRecord-compatible JSON object")
     use_rag: bool = Field(default=False, description="Whether to use RAG augmentation")
     max_retrieved: int = Field(default=3, ge=1, le=20, description="Max RAG passages to retrieve")
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=2048, description="Override max tokens for this request")
 
 
 class PassageInfo(BaseModel):
@@ -74,6 +92,7 @@ class InferResponse(BaseModel):
     used_rag: bool = Field(default=False, description="Whether RAG was used")
     retrieved_passages: List[PassageInfo] = Field(default_factory=list, description="Retrieved reference passages")
     model: str = Field(default="rule-based", description="Model used for inference")
+    latency_ms: float = Field(default=0.0, description="End-to-end request latency in milliseconds")
 
 
 # --------------------------------------------------------------------------- #
@@ -82,6 +101,7 @@ class InferResponse(BaseModel):
 def create_app(
     config: Optional[dict] = None,
     runner: Optional["InferenceRunner"] = None,  # type: ignore[name-defined]
+    eager_load: bool = False,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -94,23 +114,37 @@ def create_app(
         Pre-built runner. If None, one is built lazily from ``config`` on
         first ``/infer`` call. Tests can inject a runner to avoid touching
         the model files.
-
-    Returns
-    -------
-    FastAPI
-        Configured FastAPI app.
+    eager_load : bool
+        If True, load the model + adapter at app startup (so first /infer
+        is fast). If False (default), the model loads on the first /infer
+        call (~30s warmup, then ~3s per call).
     """
     app = FastAPI(
         title="FSI-SLM Inference Server",
         description="Fluid-Structure Interaction interpretation via SLM",
-        version="0.2.0",
+        version="0.3.0",
     )
 
     _config = config or {}
-    _runner = runner  # built lazily on first /infer if None
+    _runner: Any = runner  # built lazily on first /infer if None
+    _load_started_at: Optional[float] = None
+    _load_completed_at: Optional[float] = None
+
+    def _adapter_path() -> str:
+        return _config.get("inference", {}).get("adapter_path", "artifacts/adapters")
+
+    def _rag_index_path() -> str:
+        return _config.get("inference", {}).get(
+            "rag_index_dir",
+            _config.get("rag", {}).get("index_dir", "artifacts/rag_index"),
+        )
+
+    def _has_trained_model() -> bool:
+        adapter = _adapter_path()
+        return bool(adapter and Path(adapter, "adapters.safetensors").exists())
 
     def _get_runner() -> "InferenceRunner":  # type: ignore[name-defined]
-        nonlocal _runner
+        nonlocal _runner, _load_started_at, _load_completed_at
         if _runner is None:
             from inference.runner import InferenceConfig, InferenceRunner
 
@@ -122,8 +156,7 @@ def create_app(
                 ),
                 adapter_path=cfg.get("adapter_path", "artifacts/adapters"),
                 rag_index_dir=cfg.get(
-                    "rag_index_dir",
-                    rag_cfg.get("index_dir", "artifacts/rag_index"),
+                    "rag_index_dir", rag_cfg.get("index_dir", "artifacts/rag_index")
                 ),
                 max_tokens=cfg.get("max_tokens", 350),
                 temperature=cfg.get("temperature", 0.0),
@@ -133,57 +166,69 @@ def create_app(
                     "rag_score_threshold", rag_cfg.get("score_threshold", 0.3)
                 ),
             )
+            logger.info(f"Loading model: {inf_cfg.model_name} + adapter {inf_cfg.adapter_path}")
+            _load_started_at = time.time()
             _runner = InferenceRunner(inf_cfg)
+            _load_completed_at = time.time()
+            logger.info(
+                f"Model loaded in {_load_completed_at - _load_started_at:.1f}s"
+            )
         return _runner
 
-    def _has_trained_model() -> bool:
-        cfg = _config.get("inference", {})
-        adapter = cfg.get("adapter_path")
-        return bool(adapter and Path(adapter, "adapters.safetensors").exists())
+    @app.on_event("startup")
+    async def _startup() -> None:
+        if eager_load:
+            logger.info("Eager-loading model at startup")
+            _get_runner()
+        logger.info(f"Server ready: model={'trained' if _has_trained_model() else 'rule-based'}, "
+                    f"rag={Path(_rag_index_path(), 'index.faiss').exists()}")
 
+    # ------------------------------------------------------------------ #
+    # Health / readiness
+    # ------------------------------------------------------------------ #
     @app.get("/health")
-    async def health():
-        """Health check endpoint."""
-        return {
+    async def health() -> Dict[str, Any]:
+        """Health check with model load timing."""
+        result: Dict[str, Any] = {
             "status": "ok",
             "model": "trained" if _has_trained_model() else "rule-based",
-            "rag_index": Path(
-                _config.get("inference", {}).get(
-                    "rag_index_dir", "artifacts/rag_index"
-                ),
-                "index.faiss",
-            ).exists(),
+            "model_loaded": _runner is not None,
+            "rag_index": Path(_rag_index_path(), "index.faiss").exists(),
         }
+        if _load_completed_at is not None and _load_started_at is not None:
+            result["load_completed_at"] = _load_completed_at
+            result["load_duration_s"] = _load_completed_at - _load_started_at
+        return result
 
+    @app.get("/ready")
+    async def ready() -> Dict[str, Any]:
+        """Readiness probe: 200 only when model is loaded."""
+        if _runner is not None:
+            return {"ready": True}
+        raise HTTPException(status_code=503, detail="Model not yet loaded")
+
+    # ------------------------------------------------------------------ #
+    # Inference
+    # ------------------------------------------------------------------ #
     @app.post("/infer", response_model=InferResponse)
-    async def infer(request: InferRequest):
-        """Run inference on a FeatureRecord and return structured interpretation.
-
-        Parameters
-        ----------
-        request : InferRequest
-            The inference request body.
-
-        Returns
-        -------
-        InferResponse
-            The structured interpretation with optional RAG citations.
-        """
+    async def infer(request: InferRequest) -> InferResponse:
+        """Run inference on a FeatureRecord and return structured interpretation."""
+        t0 = time.time()
+        log_extra = {"experiment_id": "?", "use_rag": request.use_rag}
         try:
             fr = FeatureRecord.model_validate(request.feature_record)
+            log_extra["experiment_id"] = fr.experiment_id
         except Exception as e:
+            logger.exception(f"Invalid FeatureRecord: {e}")
             raise HTTPException(status_code=422, detail=f"Invalid FeatureRecord: {e}")
 
         retrieved_passages: List[dict] = []
 
-        # Decide predictor
         if _has_trained_model():
             runner = _get_runner()
             if request.use_rag:
                 try:
-                    retrieved = runner.retrieve(
-                        fr, top_k=request.max_retrieved
-                    )
+                    retrieved = runner.retrieve(fr, top_k=request.max_retrieved)
                     retrieved_passages = [
                         {
                             "text": r.passage_text,
@@ -201,7 +246,9 @@ def create_app(
 
             try:
                 interpretation = runner.generate(
-                    fr, use_rag=bool(request.use_rag and retrieved)
+                    fr,
+                    use_rag=bool(request.use_rag and retrieved),
+                    max_tokens=request.max_tokens,
                 )
             except Exception as e:
                 logger.exception(f"Model inference failed, falling back: {e}")
@@ -209,29 +256,85 @@ def create_app(
                 interpretation = describe(fr)
             model_label = "trained"
         else:
-            # Rule-based fallback
             from Data.describe import describe
             interpretation = describe(fr)
             model_label = "rule-based"
 
-        # Extract regime from interpretation
         from eval.validate_output import parse_structured_fields
         parsed = parse_structured_fields(interpretation)
         regime = parsed.get("regime")
+
+        latency_ms = (time.time() - t0) * 1000.0
+        logger.info(
+            f"infer exp={fr.experiment_id} rag={request.use_rag} "
+            f"model={model_label} regime={regime} latency_ms={latency_ms:.0f}"
+        )
 
         return InferResponse(
             experiment_id=fr.experiment_id,
             interpretation=interpretation,
             regime=regime,
             used_rag=request.use_rag and bool(retrieved_passages),
-            retrieved_passages=[
-                PassageInfo(**p) for p in retrieved_passages
-            ],
+            retrieved_passages=[PassageInfo(**p) for p in retrieved_passages],
             model=model_label,
+            latency_ms=latency_ms,
         )
 
+    @app.post("/infer/stream")
+    async def infer_stream(request: InferRequest):
+        """Stream tokens via Server-Sent Events.
+
+        Each event has the form ``data: <json>\\n\\n``. The JSON has
+        ``text`` (the new token text) and ``done`` (bool). The last
+        event has ``done: true`` and includes ``interpretation`` (full
+        text) plus ``regime`` and ``used_rag``.
+        """
+        try:
+            fr = FeatureRecord.model_validate(request.feature_record)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Invalid FeatureRecord: {e}")
+
+        if not _has_trained_model():
+            raise HTTPException(status_code=503, detail="Streaming requires a trained model")
+
+        runner = _get_runner()
+        retrieved: List = []
+        if request.use_rag:
+            try:
+                retrieved = runner.retrieve(fr, top_k=request.max_retrieved)
+            except Exception as e:
+                logger.warning(f"RAG retrieval failed: {e}")
+
+        def event_gen():
+            pieces: List[str] = []
+            try:
+                for response in runner.stream(
+                    fr,
+                    use_rag=bool(request.use_rag and retrieved),
+                    max_tokens=request.max_tokens,
+                ):
+                    text_piece = getattr(response, "text", "") or ""
+                    pieces.append(text_piece)
+                    yield f"data: {json.dumps({'text': text_piece, 'done': False})}\n\n"
+                full = "".join(pieces)
+                from eval.validate_output import parse_structured_fields
+                parsed = parse_structured_fields(full)
+                payload = {
+                    "text": "",
+                    "done": True,
+                    "interpretation": full,
+                    "regime": parsed.get("regime"),
+                    "used_rag": request.use_rag and bool(retrieved),
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+            except Exception as e:
+                logger.exception(f"Streaming inference failed: {e}")
+                yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+
+        return StreamingResponse(event_gen(), media_type="text/event-stream")
+
     @app.get("/schema")
-    async def get_schema():
+    async def get_schema() -> dict:
         """Return the FeatureRecord JSON schema for API consumers."""
         return FeatureRecord.model_json_schema()
 
@@ -241,7 +344,8 @@ def create_app(
 # --------------------------------------------------------------------------- #
 # Direct execution
 # --------------------------------------------------------------------------- #
-def main(host: str = "0.0.0.0", port: int = 8000, config_path: str = "configs/default.yaml") -> None:
+def main(host: str = "0.0.0.0", port: int = 8000, config_path: str = "configs/default.yaml",
+         eager_load: bool = False) -> None:
     """Start the server directly.
 
     Parameters
@@ -252,6 +356,8 @@ def main(host: str = "0.0.0.0", port: int = 8000, config_path: str = "configs/de
         Server port.
     config_path : str
         Path to YAML configuration file.
+    eager_load : bool
+        If True, load model + adapter at startup (slow start, fast first request).
     """
     import yaml
     import uvicorn
@@ -259,8 +365,8 @@ def main(host: str = "0.0.0.0", port: int = 8000, config_path: str = "configs/de
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    app = create_app(config=config)
-    uvicorn.run(app, host=host, port=port)
+    app = create_app(config=config, eager_load=eager_load)
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
@@ -269,5 +375,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--eager-load", action="store_true",
+                        help="Load model + adapter at startup (slower boot, faster first request)")
     args = parser.parse_args()
-    main(host=args.host, port=args.port, config_path=args.config)
+    main(host=args.host, port=args.port, config_path=args.config, eager_load=args.eager_load)

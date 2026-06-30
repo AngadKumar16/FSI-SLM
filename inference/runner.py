@@ -169,6 +169,31 @@ class InferenceRunner:
         )
         return text
 
+    def stream(
+        self,
+        feature_record: FeatureRecord,
+        use_rag: bool = False,
+        max_tokens: Optional[int] = None,
+    ):
+        """Generator that yields one GenerationResponse at a time.
+
+        Use this for token-by-token streaming (SSE, etc.). Each yielded
+        object has a ``.text`` field (string) plus optional ``token`` /
+        ``finish_reason`` metadata, depending on the mlx_lm version.
+        """
+        self._ensure_model()
+        retrieved = self.retrieve(feature_record) if use_rag else None
+        prompt = self.build_prompt(feature_record, retrieved=retrieved)
+        from mlx_lm import stream_generate as mlx_stream
+
+        for response in mlx_stream(
+            self._model,  # type: ignore[arg-type]
+            self._tokenizer,  # type: ignore[arg-type]
+            prompt=prompt,
+            max_tokens=max_tokens or self.config.max_tokens,
+        ):
+            yield response
+
     def generate_batch(
         self,
         feature_records: List[FeatureRecord],

@@ -418,6 +418,8 @@ def infer(
     baseline: bool = False,
     config_path: str = "configs/default.yaml",
     max_tokens: Optional[int] = None,
+    json_output: bool = False,
+    stream: bool = False,
 ) -> str:
     """Run inference on a single FeatureRecord.
 
@@ -436,6 +438,10 @@ def infer(
         Path to YAML configuration file.
     max_tokens : int, optional
         Override ``inference.max_tokens`` from the config.
+    json_output : bool
+        Print a machine-readable JSON object (instead of pretty text).
+    stream : bool
+        Stream tokens to stdout as they are generated (token-by-token).
 
     Returns
     -------
@@ -471,6 +477,7 @@ def infer(
 
         prediction = describe(fr)
         predictor_name = "rule-based"
+        retrieved: list = []
     else:
         from inference.runner import InferenceRunner
 
@@ -480,32 +487,70 @@ def infer(
         with InferenceRunner(inf_cfg) as runner:
             if use_rag:
                 retrieved = runner.retrieve(fr)
-                prompt = runner.build_prompt(fr, retrieved=retrieved)
                 print(f"[cli] RAG: retrieved {len(retrieved)} passages")
             else:
-                prompt = runner.build_prompt(fr)
-            print("\n[cli] Prompt:")
-            print("-" * 60)
-            print(prompt)
-            print("-" * 60)
-            print("\n[cli] Generating...")
-            prediction = runner.generate(fr, use_rag=use_rag, max_tokens=max_tokens)
-        predictor_name = f"trained-model+adapter({'rag' if use_rag else 'no-rag'})"
+                retrieved = []
 
-    print(f"\n[cli] Prediction ({predictor_name}):")
-    print(prediction)
+            if stream:
+                print(f"\n[cli] Streaming prediction ({predictor_name_to_label(adapter_path, use_rag)}):", flush=True)
+                print("-" * 60, flush=True)
+                pieces: list = []
+                for response in runner.stream(fr, use_rag=use_rag, max_tokens=max_tokens):
+                    piece = getattr(response, "text", "") or ""
+                    pieces.append(piece)
+                    if not json_output:
+                        print(piece, end="", flush=True)
+                if not json_output:
+                    print()  # final newline
+                prediction = "".join(pieces)
+                print("-" * 60, flush=True)
+            else:
+                prediction = runner.generate(fr, use_rag=use_rag, max_tokens=max_tokens)
+        predictor_name = predictor_name_to_label(adapter_path, use_rag)
 
-    # Validate against expected format
-    from eval.validate_output import validate_output
+    # Validate
+    from eval.validate_output import validate_output, parse_structured_fields
 
     result = validate_output(prediction)
-    print(f"\n[cli] Validator: valid={result.valid}")
-    if result.errors:
-        print(f"  errors:   {result.errors}")
-    if result.warnings:
-        print(f"  warnings: {result.warnings}")
+    parsed = parse_structured_fields(prediction)
+
+    if json_output:
+        out = {
+            "experiment_id": fr.experiment_id,
+            "interpretation": prediction,
+            "predictor": predictor_name,
+            "regime": parsed.get("regime"),
+            "used_rag": use_rag and bool(retrieved),
+            "retrieved_passages": [
+                {
+                    "text": r.passage_text,
+                    "source": r.source,
+                    "score": r.score,
+                    "page": r.page,
+                }
+                for r in retrieved
+            ],
+            "validator": {
+                "valid": result.valid,
+                "errors": list(result.errors),
+                "warnings": list(result.warnings),
+            },
+        }
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"\n[cli] Prediction ({predictor_name}):")
+        print(prediction)
+        print(f"\n[cli] Validator: valid={result.valid}")
+        if result.errors:
+            print(f"  errors:   {result.errors}")
+        if result.warnings:
+            print(f"  warnings: {result.warnings}")
 
     return prediction
+
+
+def predictor_name_to_label(adapter_path: str, use_rag: bool) -> str:
+    return f"trained-model+adapter({'rag' if use_rag else 'no-rag'})"
 
 
 def serve(
