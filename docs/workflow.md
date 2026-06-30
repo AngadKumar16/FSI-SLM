@@ -11,6 +11,8 @@ flowchart TB
     subgraph sources["Inputs"]
         PDFs["PDF library<br/>(Data/Papers/)"]
         Synth["Simulator<br/>(Data/synthetic.py)"]
+        REAL["Real FSI data<br/>(RawExperiment JSON or manual entry)"]
+        QURY["User question<br/>(free text)"]
     end
 
     subgraph build["Stage 1 - Build"]
@@ -30,12 +32,15 @@ flowchart TB
 
     subgraph serve["Stage 3 - Serve"]
         INF["Inference runner<br/>(inference/runner.py)"]
+        QA["Q&A path<br/>(runner.answer, base model + RAG)"]
         EVAL["Scorer<br/>(eval/evaluate.py)"]
         CLI["CLI commands<br/>(cli.py eval, infer)"]
         API["HTTP API<br/>(serve/fastapi_app.py)"]
+        UI["Gradio web UI<br/>(serve/gradio_app.py, cli.py ui)"]
     end
 
     Synth --> FE
+    REAL --> FE
     FE --> FR["FeatureRecord<br/>(Data/schema.py Pydantic v2)"]
     FR --> DS
     FD --> DS
@@ -53,11 +58,26 @@ flowchart TB
 
     ADAPT --> INF
     IDX --> INF
+    IDX --> QA
     FR --> INF
+    FR --> QA
+    BASE --> QA
+    QURY --> QA
     INF --> EVAL
     INF --> CLI
     INF --> API
+    INF --> UI
+    QA --> UI
+    UI --> API
 ```
+
+Two ways a user interacts with a record at serve time: the **structured
+interpretation** (the fixed 6-part description the trained adapter produces via
+`inference/runner.py:generate`) and **free-text questions** about that same
+record (answered by the base instruct model via `inference/runner.py:answer`,
+grounded in the feature record plus retrieved literature). The Gradio UI exposes
+both; real FSI data enters as a `RawExperiment` (extracted to a `FeatureRecord`)
+or is typed directly into the manual form.
 
 ## CLI command flow
 
@@ -70,10 +90,43 @@ flowchart LR
     A --> E["Evaluate<br/>(cli.py eval)"]
     A --> IN["Run single record<br/>(cli.py infer)"]
     A --> S["HTTP server<br/>(cli.py serve)"]
+    A --> U["Web UI<br/>(cli.py ui)"]
     R --> IN
     R --> S
     R --> E
+    R --> U
 ```
+
+## UI and question flow (provide real data, then interpret or ask)
+
+```mermaid
+flowchart TB
+    U["User<br/>(Gradio UI, serve/gradio_app.py)"]
+
+    subgraph provide["1 - Provide real FSI data"]
+        UP["Upload RawExperiment JSON"] --> EX["features/extract.py"]
+        FORM["Manual form (~25 fields)"] --> VAL["Validate FeatureRecord"]
+        EX --> FRR["Active FeatureRecord<br/>(+ range_warnings units check)"]
+        VAL --> FRR
+    end
+
+    U --> provide
+
+    FRR --> STRUCT["2 - Structured interpretation<br/>(runner.generate, trained adapter)"]
+    FRR --> ASK["3 - Ask questions (free text)"]
+    Q["User question (free text)"] --> ASK
+    ASK --> ANS["runner.answer<br/>(base model + record + RAG)"]
+
+    STRUCT --> OUT1["6-part structured description<br/>+ retrieved passages"]
+    ANS --> OUT2["Answer grounded in record<br/>+ cited sources"]
+    OUT1 --> U
+    OUT2 --> U
+```
+
+The trained LoRA adapter only does the fixed 6-part interpretation, so
+open-ended questions are routed to the **base** Phi-4-mini instruct model with
+the feature record pinned into context (and optional RAG passages) -- it never
+overrides the record's measured numbers.
 
 ## Inference pipeline (single FeatureRecord to text)
 
@@ -117,5 +170,7 @@ flowchart TB
 | Index corpus | PDFs in `Data/Papers/` | `index.faiss` + `metadata.json` | `rag/index.py` |
 | Train | JSONL + Phi-4-mini base | LoRA adapter | `train/sft.py` |
 | Inference | FeatureRecord (+ optional FAISS hits) + adapter | structured text | `inference/runner.py` |
+| Q&A | FeatureRecord + user question (+ FAISS hits) + base model | free-text answer | `inference/runner.py:answer` |
 | Score predictions | prediction text vs ground truth | JSON metrics | `eval/evaluate.py` |
 | Serve | same as inference | JSON via HTTP | `serve/fastapi_app.py` |
+| Web UI | real FSI data (RawExperiment/form) + question | interpretation / answer in browser | `serve/gradio_app.py` |

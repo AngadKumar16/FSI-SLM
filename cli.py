@@ -23,6 +23,9 @@ Usage::
 
     # Start the inference server
     python cli.py serve --port 8000
+
+    # Launch the Gradio web UI (provide data, interpret, ask questions)
+    python cli.py ui --port 7860
 """
 
 from __future__ import annotations
@@ -592,6 +595,36 @@ def serve(
     )
 
 
+def ui(
+    config_path: str = "configs/default.yaml",
+    host: str = "127.0.0.1",
+    port: int = 7860,
+    share: bool = False,
+) -> None:
+    """Launch the Gradio web UI.
+
+    The UI lets a user provide real FSI data (upload a RawExperiment JSON or
+    fill the manual form), get the structured interpretation, and ask free-text
+    questions about the record.
+
+    Parameters
+    ----------
+    config_path : str
+        Path to YAML configuration file.
+    host : str
+        Bind address (default 127.0.0.1; use 0.0.0.0 to expose on the LAN).
+    port : int
+        Server port (default 7860).
+    share : bool
+        Create a temporary public Gradio share link.
+    """
+    from serve.gradio_app import create_ui
+
+    ctx = CLIContext.from_config_path(config_path)
+    demo = create_ui(config=ctx.config)
+    demo.launch(server_name=host, server_port=port, share=share)
+demo.launch(server_name=host, server_port=port, share=True)
+
 def main() -> None:
     """Main entry point - dispatches to subcommands via fire.Fire."""
     import fire
@@ -603,6 +636,7 @@ def main() -> None:
         "eval": eval,
         "infer": infer,
         "serve": serve,
+        "ui": ui,
     })
 
 
@@ -619,5 +653,6 @@ __all__ = [
     "eval",
     "infer",
     "serve",
+    "ui",
     "main",
 ]

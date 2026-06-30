@@ -21,7 +21,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from Data.schema import FeatureRecord
-from train.tokenization.prompt_template import SYSTEM_PROMPT, render_chat
+from train.tokenization.prompt_template import (
+    QA_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    render_chat,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -44,6 +48,13 @@ class InferenceConfig:
     top_k: int = 3           # RAG top_k
     score_threshold: float = 0.3
     seed: int = 42
+    # --- free-text Q&A ---
+    qa_max_tokens: int = 512
+    qa_use_base_model: bool = True
+    # When True (default), free-text questions are answered by the *base*
+    # instruct model loaded without the LoRA adapter (the adapter is narrowly
+    # trained for the fixed structured interpretation, not open Q&A). Set False
+    # to reuse the adapter-loaded model and avoid holding a second copy in RAM.
 
 
 # --------------------------------------------------------------------------- #
@@ -62,6 +73,10 @@ class InferenceRunner:
         self._model = None
         self._tokenizer = None
         self._hf_tokenizer = None
+        # Base model (no adapter) used for free-text Q&A; lazily loaded.
+        self._base_model = None
+        self._base_tokenizer = None
+        self._base_hf_tokenizer = None
         self._rag_index = None
         self._rag_metadata = None
         self._rag_model = None
@@ -92,6 +107,30 @@ class InferenceRunner:
         # mlx-lm returns a TokenizerWrapper; for chat-template + hf utils we
         # need the underlying PreTrainedTokenizer.
         self._hf_tokenizer = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
+
+    def _ensure_base_model(self) -> None:
+        """Load the base instruct model *without* the LoRA adapter for Q&A.
+
+        If ``qa_use_base_model`` is False, the adapter-loaded model is reused
+        instead (so only one copy of the weights is held in memory).
+        """
+        if not self.config.qa_use_base_model:
+            self._ensure_model()
+            self._base_model = self._model
+            self._base_tokenizer = self._tokenizer
+            self._base_hf_tokenizer = self._hf_tokenizer
+            return
+        if self._base_model is not None:
+            return
+        from mlx_lm.utils import load as mlx_load
+
+        print("[infer] Loading base model (no adapter) for Q&A...")
+        loaded = mlx_load(self.config.model_name)
+        self._base_model = loaded[0]
+        self._base_tokenizer = loaded[1]
+        self._base_hf_tokenizer = getattr(
+            self._base_tokenizer, "_tokenizer", self._base_tokenizer
+        )
 
     def _ensure_rag(self) -> bool:
         """Load FAISS index if available. Returns True if loaded."""
@@ -138,6 +177,32 @@ class InferenceRunner:
 
         return retrieve(
             query=build_query(feature_record),
+            index=self._rag_index,
+            metadata=self._rag_metadata,
+            model=self._rag_model,
+            top_k=top_k or self.config.top_k,
+            score_threshold=self.config.score_threshold,
+        )
+
+    def retrieve_for_question(
+        self,
+        feature_record: FeatureRecord,
+        question: str,
+        top_k: Optional[int] = None,
+    ) -> List:
+        """RAG retrieval for a free-text question about an experiment.
+
+        The query combines the question with a short summary of the record so
+        retrieval is steered by both what the user is asking and the operating
+        point. Returns [] if no index is available.
+        """
+        if not self._ensure_rag():
+            return []
+        from rag.retrieve import build_query, retrieve
+
+        query = f"{question}\n{build_query(feature_record)}"
+        return retrieve(
+            query=query,
             index=self._rag_index,
             metadata=self._rag_metadata,
             model=self._rag_model,
@@ -215,12 +280,94 @@ class InferenceRunner:
         return out
 
     # ------------------------------------------------------------------ #
+    # Free-text Q&A (open-ended questions grounded in one record)
+    # ------------------------------------------------------------------ #
+    def answer(
+        self,
+        feature_record: FeatureRecord,
+        question: str,
+        use_rag: bool = True,
+        history: Optional[List[Tuple[str, str]]] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Tuple[str, List]:
+        """Answer a free-text question about a single experiment.
+
+        Unlike :meth:`generate` (which drives the fixed structured
+        interpretation the LoRA adapter is trained for), this uses the base
+        instruct model. The feature record is pinned into the system message so
+        it is always in context, prior turns are replayed as chat history, and
+        any retrieved passages are attached to the current question.
+
+        Parameters
+        ----------
+        feature_record : FeatureRecord
+            The experiment the question is about (grounded source of truth).
+        question : str
+            The user's free-text question.
+        use_rag : bool
+            Retrieve literature passages (steered by the question) for grounding.
+        history : list[tuple[str, str]], optional
+            Prior ``(question, answer)`` turns for multi-turn context.
+        max_tokens : int, optional
+            Override ``qa_max_tokens``.
+
+        Returns
+        -------
+        (answer_text, retrieved_passages)
+            The generated answer and the list of ``RetrievalResult`` used (may
+            be empty).
+        """
+        self._ensure_base_model()
+
+        retrieved: List = []
+        if use_rag:
+            retrieved = self.retrieve_for_question(feature_record, question)
+
+        # The record is pinned into the system message so it survives every turn.
+        system = (
+            QA_SYSTEM_PROMPT
+            + "\n\n[EXPERIMENT FEATURE RECORD]\n"
+            + feature_record.to_prompt_block()
+        )
+
+        from rag.prompt_assembly import _format_passages
+
+        ref_block = _format_passages(retrieved)
+        user_content = (f"{ref_block}\n\n" if ref_block else "") + f"Question: {question}"
+
+        messages = [{"role": "system", "content": system}]
+        for prev_q, prev_a in history or []:
+            messages.append({"role": "user", "content": prev_q})
+            messages.append({"role": "assistant", "content": prev_a})
+        messages.append({"role": "user", "content": user_content})
+
+        prompt = self._base_hf_tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+        from mlx_lm import generate as mlx_generate
+
+        text = mlx_generate(
+            self._base_model,
+            self._base_tokenizer,
+            prompt=prompt,
+            max_tokens=max_tokens or self.config.qa_max_tokens,
+            verbose=False,
+        )
+        return text, retrieved
+
+    # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
     def close(self) -> None:
         self._model = None
         self._tokenizer = None
         self._hf_tokenizer = None
+        self._base_model = None
+        self._base_tokenizer = None
+        self._base_hf_tokenizer = None
         self._rag_index = None
         self._rag_metadata = None
         self._rag_model = None
