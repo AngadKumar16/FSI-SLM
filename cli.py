@@ -557,6 +557,8 @@ def serve(
     config_path: str = "configs/default.yaml",
     port: Optional[int] = None,
     host: Optional[str] = None,
+    eager_load: bool = False,
+    workers: int = 1,
 ) -> None:
     """Start the FastAPI inference server.
 
@@ -568,6 +570,13 @@ def serve(
         Server port. Overrides config file if provided.
     host : str, optional
         Server host. Overrides config file if provided.
+    eager_load : bool
+        Load model + adapter at startup. Slow startup (~30s) but first
+        request is fast. Default: lazy-load on first /infer.
+    workers : int
+        Number of uvicorn worker processes. Each worker loads the model
+        independently into its own memory. Keep at 1 on a single Mac M4
+        Pro; raise only if you have many GBs of RAM.
     """
     from serve.fastapi_app import create_app
 
@@ -576,9 +585,10 @@ def serve(
 
     import uvicorn
     uvicorn.run(
-        create_app(config=ctx.config),
+        create_app(config=ctx.config, eager_load=eager_load),
         host=host or serve_cfg.get("host", "0.0.0.0"),
         port=port or serve_cfg.get("port", 8000),
+        workers=workers,
     )
 
 
