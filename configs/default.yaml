@@ -10,7 +10,7 @@ eval:
   output_dir: artifacts/eval_results
   regime_f1_threshold: 0.5
 inference:
-  adapter_path: artifacts/adapters_v3
+  adapter_path: artifacts/adapters
   max_tokens: 350
   model_name: ./artifacts/models/Phi-4-mini-instruct
   rag_index_dir: artifacts/rag_index

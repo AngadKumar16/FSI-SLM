@@ -40,6 +40,25 @@ SYSTEM_PROMPT = (
     "experiment's own measured values."
 )
 
+# --------------------------------------------------------------------------- #
+# Q&A system prompt (free-text questions about a single experiment)
+# --------------------------------------------------------------------------- #
+# Unlike SYSTEM_PROMPT (which drives the fixed 6-part structured interpretation
+# the LoRA adapter is trained for), this prompt is used for open-ended questions
+# answered by the *base* instruct model. The feature record is supplied as
+# grounded context and must never be contradicted.
+QA_SYSTEM_PROMPT = (
+    "You are an expert in fluid-structure interaction (FSI) and aeroelasticity "
+    "helping a researcher understand a single experiment. The feature record "
+    "provided below is the ONLY source of truth for this experiment's measured "
+    "numbers -- never contradict or invent values. If reference passages from the "
+    "literature are provided, use them only for domain grounding and cite them by "
+    "source filename when you rely on them. Answer the researcher's question "
+    "directly and concisely, reasoning from the measured values. If the record "
+    "does not contain enough information to answer, say so plainly rather than "
+    "guessing."
+)
+
 
 def apply_chat_template(
     system: str,
@@ -126,6 +145,7 @@ __all__ = [
     "PHI4_BOS",
     "PHI4_END",
     "SYSTEM_PROMPT",
+    "QA_SYSTEM_PROMPT",
     "apply_chat_template",
     "render_chat",
 ]
