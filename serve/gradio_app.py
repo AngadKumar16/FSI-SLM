@@ -396,12 +396,24 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             passages_md = _passages_markdown([])
             return summary, warnings, full_md, passages_md
 
-        runner = _get_runner()
-        retrieved = runner.retrieve(fr) if use_rag else []
-        raw_text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
-        passages_md = _passages_markdown(retrieved)
-        full_md = details + "\n\n---\n\n### Model Output\n\n" + raw_text.replace("\n", "  \n")
-        return summary, warnings, full_md, passages_md
+        try:
+            runner = _get_runner()
+            retrieved = runner.retrieve(fr) if use_rag else []
+            raw_text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
+            passages_md = _passages_markdown(retrieved)
+            full_md = details + "\n\n---\n\n### Model Output\n\n" + raw_text.replace("\n", "  \n")
+            return summary, warnings, full_md, passages_md
+        except Exception as e:  # noqa: BLE001
+            raw_text = _describe_fn(fr)
+            full_md = (
+                details
+                + "\n\n---\n\n"
+                + f"### ⚠️ Model inference failed: {e}\n\n"
+                + "Falling back to rule-based output.\n\n"
+                + raw_text.replace("\n", "  \n")
+            )
+            passages_md = _passages_markdown([])
+            return summary, warnings, full_md, passages_md
 
     def ask(fr_dict, question, use_rag, history, chat):
         history = history or []
