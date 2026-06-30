@@ -212,8 +212,59 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             )
         return fr.model_dump(mode="json"), fr.model_dump(mode="json"), _record_status(fr)
 
-    def _structured_breakdown(fr: FeatureRecord) -> str:
-        """Build a rich markdown summary of the 6 interpretation parts."""
+    def _build_metrics_table(fr: FeatureRecord) -> str:
+        """Build a detailed markdown table with all key metrics organized by category."""
+        p = fr.piv
+        s = fr.structure
+        c = fr.conditions
+        f = fr.forces
+        regime = fr.ground_truth_regime or classify_regime(fr)
+        lock = fr.lock_in_status()
+        from Data.describe import amplitude_trend, _LOCKIN_PHRASE, _mode_shape_phrase
+
+        trend = amplitude_trend(fr, regime)
+
+        lines = [
+            "| Category | Metric | Value | Notes |",
+            "|---|---|---|---|",
+        ]
+
+        # Flow conditions
+        lines.append(f"| **Conditions** | Reynolds number | {c.reynolds_number:.2e} | |")
+        lines.append(f"| | Angle of attack | {c.angle_of_attack_deg:.1f}° | |")
+        lines.append(f"| | Freestream velocity | {c.freestream_velocity_m_s:.2f} m/s | |")
+        lines.append(f"| | Reduced velocity (U*) | {c.reduced_velocity:.2f} | |")
+        lines.append(f"| | Chord | {c.chord_m:.3f} m | |")
+
+        # PIV
+        lines.append(f"| **PIV** | Shedding frequency | {p.shedding_frequency_hz:.2f} Hz | Dominant |")
+        lines.append(f"| | Strouhal number | {p.strouhal_number:.3f} | St = fD/U |")
+        lines.append(f"| | Wake width | {p.wake_width_over_c:.3f}c | >0.6 suggests separation |")
+        lines.append(f"| | Separation location | {p.separation_location_x_over_c:.3f}c | <0.6 is early |")
+        lines.append(f"| | Turbulent KE | {p.turbulent_kinetic_energy:.4f} | |")
+
+        # Structure
+        lines.append(f"| **Structure** | RMS amplitude | {s.rms_amplitude_over_c:.4f}c | {trend.value} |")
+        lines.append(f"| | Dominant frequency | {s.dominant_frequency_hz:.2f} Hz | |")
+        lines.append(f"| | Natural frequency | {s.natural_frequency_hz:.2f} Hz | |")
+        lines.append(f"| | Mode number | {int(s.mode_number)} | {_mode_shape_phrase(fr)} |")
+        lines.append(f"| | Camber | {s.camber:.3f} | |")
+
+        # Forces
+        lines.append(f"| **Forces** | CL mean | {f.cl_mean:.3f} | |")
+        lines.append(f"| | CL rms | {f.cl_rms:.3f} | |")
+        lines.append(f"| | CL dom. freq | {f.cl_dominant_frequency_hz:.2f} Hz | |")
+        lines.append(f"| | CD mean | {f.cd_mean:.3f} | |")
+        lines.append(f"| | CD rms | {f.cd_rms:.3f} | |")
+        lines.append(f"| | CD dom. freq | {f.cd_dominant_frequency_hz:.2f} Hz | |")
+        lines.append(f"| | CM mean | {f.cm_mean:.4f} | |")
+        lines.append(f"| | CM rms | {f.cm_rms:.4f} | |")
+        lines.append(f"| | CM dom. freq | {f.cm_dominant_frequency_hz:.2f} Hz | |")
+
+        return "\n".join(lines)
+
+    def _build_interpretation_cards(fr: FeatureRecord) -> str:
+        """Build interpretation as visual cards/sections."""
         regime = fr.ground_truth_regime or classify_regime(fr)
         lock = fr.lock_in_status()
         from Data.describe import amplitude_trend, _LOCKIN_PHRASE, _MECHANISM, _REGIME_PHRASE, _mode_shape_phrase
@@ -222,47 +273,127 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         p = fr.piv
         s = fr.structure
 
-        md = "## Structured Breakdown\n\n"
+        # Regime badge color
+        regime_colors = {
+            "attached flow": "🟢",
+            "separated flow": "🟡",
+            "VIV lock-in": "🔴",
+            "galloping": "🟠",
+            "stall flutter": "🟣",
+        }
+        regime_emoji = regime_colors.get(_REGIME_PHRASE[regime], "⚪")
 
-        md += "### Key Metrics\n\n"
-        md += "| Metric | Value |\n|---|---|\n"
-        md += f"| Shedding frequency | {p.shedding_frequency_hz:.2f} Hz |\n"
-        md += f"| Strouhal number St | {p.strouhal_number:.3f} |\n"
-        md += f"| Structural natural freq | {s.natural_frequency_hz:.2f} Hz |\n"
-        md += f"| RMS amplitude (a/c) | {s.rms_amplitude_over_c:.4f}c |\n"
-        md += f"| Mode number | {int(s.mode_number)} |\n"
-        md += f"| Lock-in status | {_LOCKIN_PHRASE[lock]} |\n"
-        md += f"| Amplitude trend | {trend.value} |\n\n"
+        md = "<div style='display: flex; flex-direction: column; gap: 12px;'>\n\n"
 
-        md += "### The 6-Part Interpretation\n\n"
-        md += f"1. **Regime:** {_REGIME_PHRASE[regime]}\n"
-        md += f"2. **Frequency/St:** Dominant shedding at {p.shedding_frequency_hz:.2f} Hz "
-        md += f"(St = {p.strouhal_number:.3f})\n"
-        md += f"3. **Lock-in:** {_LOCKIN_PHRASE[lock]} "
-        md += f"(shedding {p.shedding_frequency_hz:.2f} Hz vs natural {s.natural_frequency_hz:.2f} Hz)\n"
-        md += f"4. **Amplitude trend:** {trend.value} "
-        md += f"(RMS displacement {s.rms_amplitude_over_c:.4f}c)\n"
-        md += f"5. **Mode shape:** {_mode_shape_phrase(fr)}\n"
-        md += f"6. **Mechanism:** {_MECHANISM[regime]}\n"
+        # Card 1: Regime
+        md += f"<div style='background: #f0f8ff; padding: 12px; border-radius: 8px; border-left: 4px solid #2196F3;'>\n"
+        md += f"<h3>{regime_emoji} Flow Regime</h3>\n"
+        md += f"<p style='font-size: 18px; margin: 4px 0;'><strong>{_REGIME_PHRASE[regime].title()}</strong></p>\n"
+        md += f"<p style='margin: 4px 0; color: #555;'>{_MECHANISM[regime]}</p>\n"
+        md += "</div>\n\n"
 
+        # Card 2: Frequency
+        md += f"<div style='background: #fff8e1; padding: 12px; border-radius: 8px; border-left: 4px solid #FFC107;'>\n"
+        md += f"<h3>📊 Frequency & Strouhal Number</h3>\n"
+        md += f"<table style='width: 100%; border-collapse: collapse;'>\n"
+        md += f"<tr><td style='padding: 6px;'><strong>Shedding frequency</strong></td><td style='padding: 6px; text-align: right;'><code>{p.shedding_frequency_hz:.2f} Hz</code></td></tr>\n"
+        md += f"<tr><td style='padding: 6px;'><strong>Strouhal number (St)</strong></td><td style='padding: 6px; text-align: right;'><code>{p.strouhal_number:.3f}</code></td></tr>\n"
+        md += f"<tr><td style='padding: 6px;'><strong>Structural natural freq</strong></td><td style='padding: 6px; text-align: right;'><code>{s.natural_frequency_hz:.2f} Hz</code></td></tr>\n"
+        md += f"</table>\n"
+        md += "</div>\n\n"
+
+        # Card 3: Lock-in
+        lock_color = "#4CAF50" if _LOCKIN_PHRASE[lock] == "locked" else ("#FF9800" if _LOCKIN_PHRASE[lock] == "near lock-in" else "#F44336")
+        md += f"<div style='background: #fce4ec; padding: 12px; border-radius: 8px; border-left: 4px solid {lock_color};'>\n"
+        md += f"<h3>🔒 Lock-In Status</h3>\n"
+        md += f"<p style='font-size: 16px; margin: 4px 0;'><strong>{_LOCKIN_PHRASE[lock].title()}</strong></p>\n"
+        md += f"<p style='margin: 4px 0; color: #555;'>Shedding at {p.shedding_frequency_hz:.2f} Hz vs structural natural frequency {s.natural_frequency_hz:.2f} Hz</p>\n"
+        md += "</div>\n\n"
+
+        # Card 4: Amplitude
+        md += f"<div style='background: #e8f5e9; padding: 12px; border-radius: 8px; border-left: 4px solid #4CAF50;'>\n"
+        md += f"<h3>📈 Amplitude Response</h3>\n"
+        md += f"<p style='margin: 4px 0;'><strong>Trend:</strong> <code>{trend.value}</code></p>\n"
+        md += f"<p style='margin: 4px 0;'><strong>RMS displacement:</strong> <code>{s.rms_amplitude_over_c:.4f}c</code></p>\n"
+        md += "</div>\n\n"
+
+        # Card 5: Mode shape
+        md += f"<div style='background: #f3e5f5; padding: 12px; border-radius: 8px; border-left: 4px solid #9C27B0;'>\n"
+        md += f"<h3>🎭 Mode Shape</h3>\n"
+        md += f"<p style='margin: 4px 0;'>{_mode_shape_phrase(fr)}</p>\n"
+        md += "</div>\n\n"
+
+        md += "</div>"
         return md
+
+    def _build_summary_card(fr: FeatureRecord) -> str:
+        """Build a one-glance-at-a-time summary that an engineer actually wants."""
+        regime = fr.ground_truth_regime or classify_regime(fr)
+        lock = fr.lock_in_status()
+        from Data.describe import amplitude_trend, _LOCKIN_PHRASE, _MECHANISM, _REGIME_PHRASE
+        trend = amplitude_trend(fr, regime)
+        p = fr.piv
+        s = fr.structure
+
+        regime_emoji = {
+            "attached flow": "🟢", "separated flow": "🟡",
+            "VIV lock-in": "🔴", "galloping": "🟠", "stall flutter": "🟣",
+        }.get(_REGIME_PHRASE[regime], "⚪")
+
+        md = "<div style='display: flex; flex-direction: column; gap: 8px;'>\n\n"
+        md += f"<div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px; border-radius: 8px;'>\n"
+        md += f"<p style='margin: 0; font-size: 14px; opacity: 0.9;'>Flow regime</p>\n"
+        md += f"<p style='margin: 4px 0 0 0; font-size: 20px; font-weight: bold;'>{regime_emoji} {_REGIME_PHRASE[regime].title()}</p>\n"
+        md += "</div>\n\n"
+
+        md += f"<div style='background: #f8f9fa; padding: 12px; border-radius: 8px;'>\n"
+        md += f"<table style='width: 100%;'>\n"
+        md += f"<tr><td style='padding: 6px; color: #666;'>Lock-in</td><td style='padding: 6px; text-align: right; font-weight: bold;'>{_LOCKIN_PHRASE[lock]}</td></tr>\n"
+        md += f"<tr><td style='padding: 6px; color: #666;'>Amplitude</td><td style='padding: 6px; text-align: right; font-weight: bold;'>{trend.value} ({s.rms_amplitude_over_c:.3f}c)</td></tr>\n"
+        md += f"</table>\n"
+        md += "</div>\n\n"
+
+        md += f"<div style='background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 3px solid #ffc107;'>\n"
+        md += f"<p style='margin: 0; font-size: 13px;'><strong>Key insight:</strong> {_MECHANISM[regime]}</p>\n"
+        md += "</div>\n\n"
+
+        md += "</div>"
+        return md
+
+    def _structured_breakdown(fr: FeatureRecord) -> Tuple[str, str, str]:
+        """Return (summary, warnings, full_details) for Tab 2."""
+        warns = fr.range_warnings()
+        md = ""
+        md += "### Complete Feature Record\n\n"
+        md += _build_metrics_table(fr)
+        md += "\n\n"
+        md += "### Interpretation\n\n"
+        md += _build_interpretation_cards(fr)
+        md += "\n\n"
+        if warns:
+            md += "---\n\n### Data Quality Warnings\n\n"
+            for w in warns:
+                md += f"- {w}\n"
+        return _build_summary_card(fr), (
+            "### Warnings\n\n" + "\n".join(f"- {w}" for w in warns) if warns else ""
+        ), md
 
     def interpret(fr_dict, use_rag):
         if not fr_dict:
-            return "Provide FSI data first (tab 1), then interpret.", ""
+            return "Provide FSI data first (tab 1), then interpret.", "", ""
         fr = FeatureRecord.model_validate(fr_dict)
-        breakdown = _structured_breakdown(fr)
+        summary, warnings, details = _structured_breakdown(fr)
 
         if not _has_trained_model():
             raw_text = _describe_fn(fr)
-            full_md = breakdown + "\n\n---\n\n### Raw Rule-Based Output\n\n" + raw_text.replace("\n", "  \n")
-            return full_md, ""
+            full_md = details + "\n\n---\n\n### Raw Rule-Based Output\n\n" + raw_text.replace("\n", "  \n")
+            return summary, warnings, full_md
 
         runner = _get_runner()
         retrieved = runner.retrieve(fr) if use_rag else []
         raw_text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
-        full_md = breakdown + "\n\n---\n\n### Model Output\n\n" + raw_text.replace("\n", "  \n")
-        return full_md, _passages_markdown(retrieved)
+        full_md = details + "\n\n---\n\n### Model Output\n\n" + raw_text.replace("\n", "  \n")
+        return summary, warnings, full_md
 
     def ask(fr_dict, question, use_rag, history, chat):
         history = history or []
@@ -339,9 +470,6 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
                 with gr.Row():
                     shedding_frequency_hz = gr.Number(label="shedding_frequency_hz", value=12.0)
                     strouhal_number = gr.Number(label="strouhal_number", value=0.6)
-                with gr.Row():
-                    shedding_frequency_hz = gr.Number(label="shedding_frequency_hz", value=12.0)
-                    strouhal_number = gr.Number(label="strouhal_number", value=0.6)
                     wake_width_over_c = gr.Number(label="wake_width_over_c", value=0.8)
                     separation_location_x_over_c = gr.Number(label="separation_location_x_over_c", value=0.6)
                     turbulent_kinetic_energy = gr.Number(label="turbulent_kinetic_energy", value=0.05)
@@ -386,7 +514,15 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         with gr.Tab("2 · Structured interpretation"):
             use_rag_struct = gr.Checkbox(label="Use RAG (retrieve literature passages)", value=False)
             interpret_btn = gr.Button("Interpret record", variant="primary")
-            interp_out = gr.Markdown(label="Structured interpretation")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    summary_out = gr.Markdown("### Quick Summary")
+                with gr.Column(scale=2):
+                    warnings_out = gr.Markdown("")
+            with gr.Row():
+                metrics_out = gr.Markdown("### Complete Feature Record")
+            with gr.Row():
+                interp_out = gr.Markdown(label="Structured interpretation")
             interp_passages = gr.Markdown()
 
         # ---- Tab 3: free-text Q&A ---- #
@@ -431,7 +567,7 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         )
         interpret_btn.click(
             interpret, inputs=[fr_state, use_rag_struct],
-            outputs=[interp_out, interp_passages],
+            outputs=[summary_out, warnings_out, interp_out, interp_passages],
         )
         ask_btn.click(
             ask,
