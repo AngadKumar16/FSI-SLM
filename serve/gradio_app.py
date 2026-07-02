@@ -292,14 +292,14 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         md = "<div style='display: flex; flex-direction: column; gap: 12px;'>\n\n"
 
         # Card 1: Regime
-        md += f"<div style='background: #f0f8ff; padding: 12px; border-radius: 8px; border-left: 4px solid #2196F3;'>\n"
+        md += f"<div style='background: #f0f8ff; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #2196F3;'>\n"
         md += f"<h3>{regime_emoji} Flow Regime</h3>\n"
         md += f"<p style='font-size: 18px; margin: 4px 0;'><strong>{_REGIME_PHRASE[regime].title()}</strong></p>\n"
         md += f"<p style='margin: 4px 0; color: #555;'>{_MECHANISM[regime]}</p>\n"
         md += "</div>\n\n"
 
         # Card 2: Frequency
-        md += f"<div style='background: #fff8e1; padding: 12px; border-radius: 8px; border-left: 4px solid #FFC107;'>\n"
+        md += f"<div style='background: #fff8e1; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #FFC107;'>\n"
         md += f"<h3>📊 Frequency & Strouhal Number</h3>\n"
         md += f"<table style='width: 100%; border-collapse: collapse;'>\n"
         md += f"<tr><td style='padding: 6px;'><strong>Shedding frequency</strong></td><td style='padding: 6px; text-align: right;'><code>{p.shedding_frequency_hz:.2f} Hz</code></td></tr>\n"
@@ -310,21 +310,21 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
 
         # Card 3: Lock-in
         lock_color = "#4CAF50" if _LOCKIN_PHRASE[lock] == "locked" else ("#FF9800" if _LOCKIN_PHRASE[lock] == "near lock-in" else "#F44336")
-        md += f"<div style='background: #fce4ec; padding: 12px; border-radius: 8px; border-left: 4px solid {lock_color};'>\n"
+        md += f"<div style='background: #fce4ec; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid {lock_color};'>\n"
         md += f"<h3>🔒 Lock-In Status</h3>\n"
         md += f"<p style='font-size: 16px; margin: 4px 0;'><strong>{_LOCKIN_PHRASE[lock].title()}</strong></p>\n"
         md += f"<p style='margin: 4px 0; color: #555;'>Shedding at {p.shedding_frequency_hz:.2f} Hz vs structural natural frequency {s.natural_frequency_hz:.2f} Hz</p>\n"
         md += "</div>\n\n"
 
         # Card 4: Amplitude
-        md += f"<div style='background: #e8f5e9; padding: 12px; border-radius: 8px; border-left: 4px solid #4CAF50;'>\n"
+        md += f"<div style='background: #e8f5e9; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #4CAF50;'>\n"
         md += f"<h3>📈 Amplitude Response</h3>\n"
         md += f"<p style='margin: 4px 0;'><strong>Trend:</strong> <code>{trend.value}</code></p>\n"
         md += f"<p style='margin: 4px 0;'><strong>RMS displacement:</strong> <code>{s.rms_amplitude_over_c:.4f}c</code></p>\n"
         md += "</div>\n\n"
 
         # Card 5: Mode shape
-        md += f"<div style='background: #f3e5f5; padding: 12px; border-radius: 8px; border-left: 4px solid #9C27B0;'>\n"
+        md += f"<div style='background: #f3e5f5; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #9C27B0;'>\n"
         md += f"<h3>🎭 Mode Shape</h3>\n"
         md += f"<p style='margin: 4px 0;'>{_mode_shape_phrase(fr)}</p>\n"
         md += "</div>\n\n"
@@ -352,68 +352,69 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         md += f"<p style='margin: 4px 0 0 0; font-size: 20px; font-weight: bold;'>{regime_emoji} {_REGIME_PHRASE[regime].title()}</p>\n"
         md += "</div>\n\n"
 
-        md += f"<div style='background: #f8f9fa; padding: 12px; border-radius: 8px;'>\n"
+        md += f"<div style='background: #f8f9fa; color: #1a1a1a; padding: 12px; border-radius: 8px;'>\n"
         md += f"<table style='width: 100%;'>\n"
         md += f"<tr><td style='padding: 6px; color: #666;'>Lock-in</td><td style='padding: 6px; text-align: right; font-weight: bold;'>{_LOCKIN_PHRASE[lock]}</td></tr>\n"
         md += f"<tr><td style='padding: 6px; color: #666;'>Amplitude</td><td style='padding: 6px; text-align: right; font-weight: bold;'>{trend.value} ({s.rms_amplitude_over_c:.3f}c)</td></tr>\n"
         md += f"</table>\n"
         md += "</div>\n\n"
 
-        md += f"<div style='background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 3px solid #ffc107;'>\n"
+        md += f"<div style='background: #fff3cd; color: #1a1a1a; padding: 10px; border-radius: 6px; border-left: 3px solid #ffc107;'>\n"
         md += f"<p style='margin: 0; font-size: 13px;'><strong>Key insight:</strong> {_MECHANISM[regime]}</p>\n"
         md += "</div>\n\n"
 
         md += "</div>"
         return md
 
-    def _structured_breakdown(fr: FeatureRecord) -> Tuple[str, str, str]:
-        """Return (summary, warnings, full_details) for Tab 2."""
+    def _structured_breakdown(fr: FeatureRecord) -> Tuple[str, str, str, str]:
+        """Return (summary, warnings, metrics_md, interpretation_md) for Tab 2."""
         warns = fr.range_warnings()
-        md = ""
-        md += "### Complete Feature Record\n\n"
-        md += _build_metrics_table(fr)
-        md += "\n\n"
-        md += "### Interpretation\n\n"
-        md += _build_interpretation_cards(fr)
-        md += "\n\n"
-        if warns:
-            md += "---\n\n### Data Quality Warnings\n\n"
-            for w in warns:
-                md += f"- {w}\n"
-        return _build_summary_card(fr), (
-            "### Warnings\n\n" + "\n".join(f"- {w}" for w in warns) if warns else ""
-        ), md
+        metrics_md = "### Complete Feature Record\n\n" + _build_metrics_table(fr)
+        interp_md = "### Interpretation\n\n" + _build_interpretation_cards(fr)
+        warnings_md = (
+            "### ⚠️ Data Quality Warnings\n\n"
+            + "\n".join(f"- {w}" for w in warns)
+            if warns
+            else ""
+        )
+        return _build_summary_card(fr), warnings_md, metrics_md, interp_md
 
     def interpret(fr_dict, use_rag):
+        empty = ("### Quick Summary", "", "### Complete Feature Record", "", "")
         if not fr_dict:
-            return "Provide FSI data first (tab 1), then interpret.", "", "", ""
+            return ("Provide FSI data first (tab 1), then interpret.",) + empty[1:]
         fr = FeatureRecord.model_validate(fr_dict)
-        summary, warnings, details = _structured_breakdown(fr)
+        summary, warnings, metrics_md, interp_md = _structured_breakdown(fr)
 
         if not _has_trained_model():
             raw_text = _describe_fn(fr)
-            full_md = details + "\n\n---\n\n### Raw Rule-Based Output\n\n" + raw_text.replace("\n", "  \n")
-            passages_md = _passages_markdown([])
-            return summary, warnings, full_md, passages_md
+            interp_full = (
+                interp_md
+                + "\n\n---\n\n### Raw Rule-Based Output\n\n"
+                + raw_text.replace("\n", "  \n")
+            )
+            return summary, warnings, metrics_md, interp_full, _passages_markdown([])
 
         try:
             runner = _get_runner()
             retrieved = runner.retrieve(fr) if use_rag else []
             raw_text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
-            passages_md = _passages_markdown(retrieved)
-            full_md = details + "\n\n---\n\n### Model Output\n\n" + raw_text.replace("\n", "  \n")
-            return summary, warnings, full_md, passages_md
+            interp_full = (
+                interp_md
+                + "\n\n---\n\n### Model Output\n\n"
+                + raw_text.replace("\n", "  \n")
+            )
+            return summary, warnings, metrics_md, interp_full, _passages_markdown(retrieved)
         except Exception as e:  # noqa: BLE001
             raw_text = _describe_fn(fr)
-            full_md = (
-                details
+            interp_full = (
+                interp_md
                 + "\n\n---\n\n"
                 + f"### ⚠️ Model inference failed: {e}\n\n"
                 + "Falling back to rule-based output.\n\n"
                 + raw_text.replace("\n", "  \n")
             )
-            passages_md = _passages_markdown([])
-            return summary, warnings, full_md, passages_md
+            return summary, warnings, metrics_md, interp_full, _passages_markdown([])
 
     def ask(fr_dict, question, use_rag, history, chat):
         history = history or []
@@ -588,7 +589,7 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         )
         interpret_btn.click(
             interpret, inputs=[fr_state, use_rag_struct],
-            outputs=[summary_out, warnings_out, interp_out, interp_passages],
+            outputs=[summary_out, warnings_out, metrics_out, interp_out, interp_passages],
         )
         ask_btn.click(
             ask,
