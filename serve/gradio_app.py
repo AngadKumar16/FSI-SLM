@@ -332,6 +332,59 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         md += "</div>"
         return md
 
+    def _lockin_gauge(fr: FeatureRecord) -> str:
+        """Horizontal gauge of the shedding/natural frequency ratio.
+
+        The green band (0.9-1.1) is the locked region, amber (0.8-1.2) is
+        near lock-in, matching FeatureRecord.lock_in_status (tol=0.10).
+        """
+        f_shed = fr.piv.shedding_frequency_hz
+        f_n = fr.structure.natural_frequency_hz
+        ratio = (f_shed / f_n) if f_n > 0 else 0.0
+        # Track spans ratio 0.5 .. 1.5; clamp marker inside.
+        lo, hi = 0.5, 1.5
+        pos = max(0.0, min(1.0, (ratio - lo) / (hi - lo))) * 100
+        # Band edges as track percentages.
+        def _pct(r: float) -> float:
+            return max(0.0, min(1.0, (r - lo) / (hi - lo))) * 100
+        amber_l, amber_r = _pct(0.8), _pct(1.2)
+        green_l, green_r = _pct(0.9), _pct(1.1)
+        md = "<div style='background: #fce4ec; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #E91E63;'>\n"
+        md += "<h3>🎯 Frequency Lock-In Gauge</h3>\n"
+        md += (
+            f"<p style='margin: 4px 0; color: #555;'>Ratio "
+            f"f<sub>shed</sub>/f<sub>n</sub> = <code>{ratio:.3f}</code> "
+            f"({f_shed:.2f} Hz / {f_n:.2f} Hz)</p>\n"
+        )
+        md += "<div style='position: relative; height: 26px; background: #eee; border-radius: 13px; margin: 10px 0;'>\n"
+        md += f"<div style='position:absolute; left:{amber_l:.1f}%; width:{amber_r-amber_l:.1f}%; top:0; bottom:0; background:#FFE082; border-radius:13px;'></div>\n"
+        md += f"<div style='position:absolute; left:{green_l:.1f}%; width:{green_r-green_l:.1f}%; top:0; bottom:0; background:#A5D6A7;'></div>\n"
+        md += f"<div style='position:absolute; left:{pos:.1f}%; top:-4px; width:3px; height:34px; background:#000; transform:translateX(-1px);'></div>\n"
+        md += "</div>\n"
+        md += "<div style='display:flex; justify-content:space-between; font-size:11px; color:#777;'><span>0.5</span><span>1.0 (locked)</span><span>1.5</span></div>\n"
+        md += "</div>\n\n"
+        return md
+
+    def _pod_spectrum(fr: FeatureRecord) -> str:
+        """Horizontal energy bars for the POD mode amplitudes."""
+        amps = list(fr.piv.pod_mode_amplitudes or [])
+        if not amps:
+            return ""
+        mx = max(abs(a) for a in amps) or 1.0
+        md = "<div style='background: #e3f2fd; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #1976D2;'>\n"
+        md += "<h3>🌊 POD Mode Energy Spectrum</h3>\n"
+        for i, a in enumerate(amps):
+            w = abs(a) / mx * 100
+            md += "<div style='display:flex; align-items:center; gap:8px; margin:4px 0;'>\n"
+            md += f"<span style='width:56px; font-size:12px;'>Mode {i + 1}</span>\n"
+            md += "<div style='flex:1; background:#eee; border-radius:6px; height:16px;'>\n"
+            md += f"<div style='width:{w:.1f}%; height:16px; background:#1976D2; border-radius:6px;'></div>\n"
+            md += "</div>\n"
+            md += f"<span style='width:52px; font-size:12px; text-align:right;'><code>{a:.3f}</code></span>\n"
+            md += "</div>\n"
+        md += "</div>\n\n"
+        return md
+
     def _build_summary_card(fr: FeatureRecord) -> str:
         """Build a one-glance-at-a-time summary that an engineer actually wants."""
         regime = fr.ground_truth_regime or classify_regime(fr)
@@ -370,7 +423,13 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         """Return (summary, warnings, metrics_md, interpretation_md) for Tab 2."""
         warns = fr.range_warnings()
         metrics_md = "### Complete Feature Record\n\n" + _build_metrics_table(fr)
-        interp_md = "### Interpretation\n\n" + _build_interpretation_cards(fr)
+        interp_md = (
+            "### Interpretation\n\n"
+            + _build_interpretation_cards(fr)
+            + "\n\n### Visual Diagnostics\n\n"
+            + _lockin_gauge(fr)
+            + _pod_spectrum(fr)
+        )
         warnings_md = (
             "### ⚠️ Data Quality Warnings\n\n"
             + "\n".join(f"- {w}" for w in warns)
@@ -415,6 +474,38 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
                 + raw_text.replace("\n", "  \n")
             )
             return summary, warnings, metrics_md, interp_full, _passages_markdown([])
+
+    def download_report(fr_dict):
+        """Write a clean markdown interpretation report and return its path."""
+        if not fr_dict:
+            return None
+        import tempfile
+        fr = FeatureRecord.model_validate(fr_dict)
+        regime = fr.ground_truth_regime or classify_regime(fr)
+        from Data.describe import _REGIME_PHRASE
+
+        parts = [
+            f"# FSI Interpretation Report — {fr.experiment_id}",
+            "",
+            f"**Flow regime:** {_REGIME_PHRASE[regime].title()}  ",
+            f"**Lock-in:** {fr.lock_in_status().value}",
+            "",
+            "## Feature Record",
+            "",
+            _build_metrics_table(fr),
+            "",
+            "## Rule-Based Description",
+            "",
+            _describe_fn(fr),
+        ]
+        warns = fr.range_warnings()
+        if warns:
+            parts += ["", "## Data Quality Warnings", ""]
+            parts += [f"- {w}" for w in warns]
+        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in fr.experiment_id)
+        path = Path(tempfile.gettempdir()) / f"fsi_report_{safe_id}.md"
+        path.write_text("\n".join(parts))
+        return str(path)
 
     def ask(fr_dict, question, use_rag, history, chat):
         history = history or []
@@ -534,7 +625,9 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         # ---- Tab 2: structured interpretation ---- #
         with gr.Tab("2 · Structured interpretation"):
             use_rag_struct = gr.Checkbox(label="Use RAG (retrieve literature passages)", value=False)
-            interpret_btn = gr.Button("Interpret record", variant="primary")
+            with gr.Row():
+                interpret_btn = gr.Button("Interpret record", variant="primary")
+                report_btn = gr.DownloadButton("⬇️ Download report (.md)")
             with gr.Row():
                 with gr.Column(scale=1):
                     summary_out = gr.Markdown("### Quick Summary")
@@ -590,6 +683,9 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         interpret_btn.click(
             interpret, inputs=[fr_state, use_rag_struct],
             outputs=[summary_out, warnings_out, metrics_out, interp_out, interp_passages],
+        )
+        report_btn.click(
+            download_report, inputs=[fr_state], outputs=[report_btn],
         )
         ask_btn.click(
             ask,
