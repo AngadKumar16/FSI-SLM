@@ -254,6 +254,16 @@ def _build_lora_args(config: TrainingConfig):
     else:
         iters = 100  # safe fallback
 
+    # mlx-lm's LR schedule advances once per *optimizer* update, not per
+    # iteration, so warmup/decay lengths must be divided by grad_accum_steps.
+    # Decay spans the whole run so the LR never peaks near the end.
+    accum = max(1, config.grad_accum_steps)
+    total_opt_steps = max(1, -(-iters // accum))
+    warmup_opt_steps = min(
+        max(1, -(-config.warmup_steps // accum)) if config.warmup_steps > 0 else 0,
+        total_opt_steps // 2,
+    )
+
     return types.SimpleNamespace(
         # Model + data
         model=config.model_name,
@@ -276,11 +286,14 @@ def _build_lora_args(config: TrainingConfig):
         lr_schedule=(
             {
                 "name": "cosine_decay",
-                "arguments": [config.learning_rate, config.warmup_steps or 0],
-                "warmup": config.warmup_steps or 0,
+                "arguments": [
+                    config.learning_rate,
+                    max(1, total_opt_steps - warmup_opt_steps),
+                ],
+                "warmup": warmup_opt_steps,
                 "warmup_init": 0.0,
             }
-            if config.warmup_steps > 0
+            if warmup_opt_steps > 0
             else None
         ),
         # Batching

@@ -47,7 +47,8 @@ class ValidationResult:
 # These match the output format produced by data/describe.py.
 
 _REGIME_PATTERN = re.compile(
-    r"Regime:\s*(attached flow|separated flow|VIV lock-in|galloping|stall flutter)\s*\.",
+    r"Regime:\s*(attached flow|separated flow|VIV lock-in|galloping|stall flutter)"
+    r"\s*(?:\([^)]*\))?\s*\.",
     re.IGNORECASE,
 )
 
