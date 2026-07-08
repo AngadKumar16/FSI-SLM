@@ -1,10 +1,11 @@
-"""Upload trained LoRA adapters to a gated (restricted-access) HuggingFace repo.
+"""Upload the merged FSI-SLM model to a gated (restricted-access) HuggingFace repo.
 
 Creates the repo if needed, sets gated=manual so every access request requires
-your approval, uploads the adapters + model card.
+your approval, uploads the fused transformers-format model (cross-platform),
+the original MLX LoRA adapters, and the model card.
 
 Usage:
-    python tools/hf_upload.py --repo-id AngadKumar/fsi-slm-phi4-mini-lora
+    python tools/hf_upload.py --repo-id AngadKumar/fsi-slm-phi4-mini
     python tools/hf_upload.py --repo-id ... --private   # fully private instead of gated
 """
 
@@ -18,6 +19,7 @@ from huggingface_hub import HfApi
 
 ROOT = Path(__file__).resolve().parent.parent
 ADAPTER_DIR = ROOT / "artifacts" / "adapters"
+MERGED_DIR = ROOT / "artifacts" / "models" / "fsi-slm-merged"
 MODEL_CARD = ROOT / "tools" / "hf_model_card.md"
 EVAL_RESULTS = ROOT / "artifacts" / "eval_results" / "eval_results.json"
 
@@ -56,15 +58,18 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    files = sorted(
+    if not (MERGED_DIR / "model.safetensors.index.json").exists():
+        raise SystemExit(
+            f"No merged model in {MERGED_DIR} — run mlx_lm fuse first."
+        )
+    adapter_files = sorted(
         p for p in ADAPTER_DIR.iterdir()
         if p.name in ("adapters.safetensors", "adapter_config.json")
     )
-    if not any(p.name == "adapters.safetensors" for p in files):
-        raise SystemExit(f"No adapters.safetensors in {ADAPTER_DIR} — train first.")
 
     print(f"Repo: {args.repo_id} ({'private' if args.private else 'public + gated=manual'})")
-    for p in files:
+    print(f"  upload folder {MERGED_DIR.relative_to(ROOT)}/ -> / (transformers format)")
+    for p in adapter_files:
         print(f"  upload {p.relative_to(ROOT)} -> adapters/{p.name}")
     if args.dry_run:
         print("Dry run — nothing uploaded.")
@@ -76,7 +81,12 @@ def main() -> None:
         # Manual gating: every download request needs your approval.
         api.update_repo_settings(args.repo_id, gated="manual")
 
-    for p in files:
+    api.upload_folder(
+        folder_path=str(MERGED_DIR),
+        repo_id=args.repo_id,
+        ignore_patterns=["README.md", "sample_finetune.py"],
+    )
+    for p in adapter_files:
         api.upload_file(
             path_or_fileobj=str(p),
             path_in_repo=f"adapters/{p.name}",
