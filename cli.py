@@ -31,12 +31,17 @@ Usage::
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 import yaml
+
+# transformers tries to import TensorFlow when present; a broken TF install
+# segfaults RAG/serving paths. Nothing here needs TF -- torch/MLX only.
+os.environ.setdefault("USE_TF", "0")
 
 # Ensure the project root is on sys.path so that ``Data`` (the package
 # directory) is importable when this file is invoked as ``python cli.py``
@@ -624,6 +629,25 @@ def ui(
     demo = create_ui(config=ctx.config)
     demo.launch(server_name=host, server_port=port, share=share)
 
+def mcp(config_path: str = "configs/default.yaml") -> None:
+    """Start the MCP (Model Context Protocol) server over stdio.
+
+    Exposes interpret_experiment, ask_question, search_literature,
+    validate_interpretation, and generate_synthetic_experiment as MCP tools
+    for clients like Claude Desktop and Claude Code. Register via the
+    project's .mcp.json. The model is lazy-loaded on first inference call.
+
+    Parameters
+    ----------
+    config_path : str
+        Path to YAML configuration file (also settable via FSI_SLM_CONFIG).
+    """
+    os.environ.setdefault("FSI_SLM_CONFIG", _resolve_path(config_path))
+    from serve.mcp_server import main as mcp_main
+
+    mcp_main()
+
+
 def main() -> None:
     """Main entry point - dispatches to subcommands via fire.Fire."""
     import fire
@@ -636,6 +660,7 @@ def main() -> None:
         "infer": infer,
         "serve": serve,
         "ui": ui,
+        "mcp": mcp,
     })
 
 
@@ -653,5 +678,6 @@ __all__ = [
     "infer",
     "serve",
     "ui",
+    "mcp",
     "main",
 ]

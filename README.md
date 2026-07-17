@@ -59,6 +59,7 @@ For a detailed end-to-end workflow diagram see:
 | **Evaluation** | Per-field accuracy, regime F1, lock-in metrics | `eval/evaluate.py` |
 | **CLI** | Unified command-line interface via `fire.Fire` | `cli.py` |
 | **Serve** | FastAPI inference server with RAG | `serve/fastapi_app.py` |
+| **MCP Server** | Model Context Protocol server (tools for Claude Desktop/Code and other MCP clients) | `serve/mcp_server.py` |
 | **Config** | YAML-based configuration with sensible defaults | `configs/default.yaml` |
 
 ---
@@ -170,7 +171,44 @@ curl -X POST http://localhost:8000/infer \
   -d '{"feature_record": <YOUR_JSON>, "use_rag": false}'
 ```
 
-### 7. Validate model output
+### 7. Use it from Claude (MCP server)
+
+The project ships an MCP (Model Context Protocol) server that exposes the
+interpreter as tools for Claude Desktop, Claude Code, or any MCP client:
+
+```bash
+python cli.py mcp        # or: python -m serve.mcp_server
+```
+
+The repo's `.mcp.json` registers it automatically for Claude Code sessions
+opened in this directory. For Claude Desktop, add to
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "fsi-slm": {
+      "command": "python3",
+      "args": ["-m", "serve.mcp_server"],
+      "cwd": "/path/to/FSI-SLM"
+    }
+  }
+}
+```
+
+**Tools:**
+
+| Tool | What it does | Loads model? |
+|------|--------------|--------------|
+| `interpret_experiment` | Structured interpretation of a FeatureRecord (regime, lock-in, physics), optional RAG citations | Yes (first call, ~30s) |
+| `ask_question` | Free-text Q&A grounded in a FeatureRecord + retrieved literature | Yes |
+| `search_literature` | FAISS search over the indexed FSI paper corpus | No (embedder only) |
+| `validate_interpretation` | Parse + physics-check any generated interpretation | No |
+| `generate_synthetic_experiment` | Demo FeatureRecord for a chosen flow regime | No |
+
+**Resources:** `fsi://schema/feature_record` — the FeatureRecord JSON schema.
+
+### 8. Validate model output
 
 ```bash
 # Pipe a model output through the validator
@@ -197,6 +235,8 @@ python cli.py <command> [options]
 | `eval` | Evaluate the trained model |
 | `infer` | Run inference on a single FeatureRecord |
 | `serve` | Start the FastAPI inference server |
+| `ui` | Launch the Gradio web UI |
+| `mcp` | Start the MCP server (stdio) for Claude Desktop/Code |
 
 Each command accepts `--config-path` to specify a custom YAML configuration file (default: `configs/default.yaml`).
 

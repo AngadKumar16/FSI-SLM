@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fsi-slm": {
+      "command": "python3",
+      "args": ["-m", "serve.mcp_server"]
+    }
+  }
+}
