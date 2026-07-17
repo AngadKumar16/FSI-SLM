@@ -58,12 +58,11 @@ def build_query(feature_record: FeatureRecord) -> str:
     p = feature_record.piv
     s = feature_record.structure
 
-    regime_label = ""
-    if feature_record.ground_truth_regime is not None:
-        regime_label = feature_record.ground_truth_regime.value
-
+    # NOTE: ground_truth_regime is deliberately NOT used here. Real experiments
+    # never have it, so conditioning retrieval on the answer key would make
+    # train-time retrieval systematically better than inference-time retrieval
+    # (label leakage). The query is built from measured features only.
     query = (
-        f"Flow regime: {regime_label}. "
         f"Reynolds number: {c.reynolds_number:.4g}, "
         f"angle of attack: {c.angle_of_attack_deg:.1f} deg, "
         f"reduced velocity: {c.reduced_velocity:.2f}. "

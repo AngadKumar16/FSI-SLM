@@ -416,12 +416,30 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         md += f"<p style='margin: 0; font-size: 13px;'><strong>Key insight:</strong> {_MECHANISM[regime]}</p>\n"
         md += "</div>\n\n"
 
+        # Regime probability breakdown (all five regimes, normalized).
+        from Data.describe import regime_scores
+        scores = regime_scores(fr)
+        md += "<div style='background: #f8f9fa; color: #1a1a1a; padding: 12px; border-radius: 8px;'>\n"
+        md += "<p style='margin: 0 0 6px 0; font-size: 13px; color: #666;'><strong>Regime score breakdown</strong></p>\n"
+        for r, sc in sorted(scores.items(), key=lambda kv: -kv[1]):
+            w = sc * 100
+            md += "<div style='display:flex; align-items:center; gap:8px; margin:3px 0;'>\n"
+            md += f"<span style='width:110px; font-size:12px;'>{_REGIME_PHRASE[r]}</span>\n"
+            md += "<div style='flex:1; background:#eee; border-radius:5px; height:12px;'>\n"
+            md += f"<div style='width:{w:.1f}%; height:12px; background:#667eea; border-radius:5px;'></div>\n"
+            md += "</div>\n"
+            md += f"<span style='width:44px; font-size:12px; text-align:right;'><code>{sc:.2f}</code></span>\n"
+            md += "</div>\n"
+        md += "</div>\n\n"
+
         md += "</div>"
         return md
 
     def _structured_breakdown(fr: FeatureRecord) -> Tuple[str, str, str, str]:
         """Return (summary, warnings, metrics_md, interpretation_md) for Tab 2."""
-        warns = fr.range_warnings()
+        from features.extract import check_physical_consistency
+
+        warns = fr.range_warnings() + check_physical_consistency(fr)
         metrics_md = "### Complete Feature Record\n\n" + _build_metrics_table(fr)
         interp_md = (
             "### Interpretation\n\n"
@@ -457,7 +475,7 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         try:
             runner = _get_runner()
             retrieved = runner.retrieve(fr) if use_rag else []
-            raw_text = runner.generate(fr, use_rag=bool(use_rag and retrieved))
+            raw_text = runner.generate(fr, retrieved=retrieved)
             interp_full = (
                 interp_md
                 + "\n\n---\n\n### Model Output\n\n"
@@ -498,7 +516,9 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             "",
             _describe_fn(fr),
         ]
-        warns = fr.range_warnings()
+        from features.extract import check_physical_consistency
+
+        warns = fr.range_warnings() + check_physical_consistency(fr)
         if warns:
             parts += ["", "## Data Quality Warnings", ""]
             parts += [f"- {w}" for w in warns]
@@ -539,6 +559,50 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
 
     def reset_chat():
         return [], []
+
+    _SWEEP_EMOJI = {
+        "attached": "🟢", "separated": "🟡", "viv_lockin": "🔴",
+        "galloping": "🟠", "stall_flutter": "🟣",
+    }
+
+    def run_sweep(fr_dict, param, lo, hi, n):
+        if not fr_dict:
+            return "Provide FSI data first (tab 1), then sweep."
+        from features.sweep import find_transitions, sweep_parameter
+
+        fr = FeatureRecord.model_validate(fr_dict)
+        try:
+            points = sweep_parameter(
+                fr,
+                param=param,
+                lo=None if lo is None else float(lo),
+                hi=None if hi is None else float(hi),
+                n=int(n),
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Sweep failed: {e}"
+
+        lines = [
+            f"### Regime map — sweeping `{param}` "
+            f"({points[0].value:.2f} → {points[-1].value:.2f}, {len(points)} points)",
+            "",
+            f"| {param} | regime | confidence | f_shed (Hz) | lock-in |",
+            "|---|---|---|---|---|",
+        ]
+        for pt in points:
+            emoji = _SWEEP_EMOJI.get(pt.regime.value, "⚪")
+            lines.append(
+                f"| {pt.value:.2f} | {emoji} {pt.regime.value} | {pt.confidence:.2f} "
+                f"| {pt.shedding_frequency_hz:.2f} | {pt.lock_in} |"
+            )
+        transitions = find_transitions(points)
+        if transitions:
+            lines += ["", "**Regime transitions:**", ""]
+            for value, frm, to in transitions:
+                lines.append(f"- at `{param} ≈ {value:.2f}`: {frm.value} → {to.value}")
+        else:
+            lines += ["", "_No regime transition inside this range._"]
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------ #
     # Layout
@@ -639,6 +703,27 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
                 interp_out = gr.Markdown(label="Structured interpretation")
             interp_passages = gr.Markdown()
 
+        # ---- Tab: what-if sweep ---- #
+        with gr.Tab("What-if sweep"):
+            gr.Markdown(
+                "Vary one operating parameter across a range (holding the rest "
+                "of the record fixed, with physically coupled quantities "
+                "rescaled) and map the predicted regime at each point — e.g. "
+                "find the lock-in window in reduced velocity. Instant, "
+                "rule-based, no model load."
+            )
+            with gr.Row():
+                sweep_param = gr.Dropdown(
+                    label="Parameter",
+                    choices=["reduced_velocity", "angle_of_attack_deg", "natural_frequency_hz"],
+                    value="reduced_velocity",
+                )
+                sweep_lo = gr.Number(label="From (blank = auto)", value=None)
+                sweep_hi = gr.Number(label="To (blank = auto)", value=None)
+                sweep_n = gr.Slider(label="Points", minimum=5, maximum=41, step=2, value=15)
+            sweep_btn = gr.Button("Run sweep", variant="primary")
+            sweep_out = gr.Markdown()
+
         # ---- Tab 3: free-text Q&A ---- #
         with gr.Tab("3 · Ask questions"):
             gr.Markdown(
@@ -698,6 +783,11 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             outputs=[history_state, chatbot, question_box],
         )
         clear_btn.click(reset_chat, outputs=[history_state, chatbot])
+        sweep_btn.click(
+            run_sweep,
+            inputs=[fr_state, sweep_param, sweep_lo, sweep_hi, sweep_n],
+            outputs=[sweep_out],
+        )
 
     return demo
 

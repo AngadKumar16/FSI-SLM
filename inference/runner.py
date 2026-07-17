@@ -218,11 +218,20 @@ class InferenceRunner:
         feature_record: FeatureRecord,
         use_rag: bool = False,
         max_tokens: Optional[int] = None,
+        retrieved: Optional[list] = None,
     ) -> str:
-        """Generate one interpretation. Returns raw text."""
+        """Generate one interpretation. Returns raw text.
+
+        ``retrieved`` lets callers pass passages they already fetched (so
+        retrieval runs once, and citations shown to the user match the prompt
+        the model actually saw). When ``use_rag`` is True and ``retrieved`` is
+        None, retrieval runs here. An empty passage list falls back to the
+        plain (no-RAG) prompt so the prompt format always matches training.
+        """
         self._ensure_model()
-        retrieved = self.retrieve(feature_record) if use_rag else None
-        prompt = self.build_prompt(feature_record, retrieved=retrieved)
+        if retrieved is None and use_rag:
+            retrieved = self.retrieve(feature_record)
+        prompt = self.build_prompt(feature_record, retrieved=retrieved or None)
         from mlx_lm import generate as mlx_generate
 
         text = mlx_generate(
@@ -239,16 +248,19 @@ class InferenceRunner:
         feature_record: FeatureRecord,
         use_rag: bool = False,
         max_tokens: Optional[int] = None,
+        retrieved: Optional[list] = None,
     ):
         """Generator that yields one GenerationResponse at a time.
 
         Use this for token-by-token streaming (SSE, etc.). Each yielded
         object has a ``.text`` field (string) plus optional ``token`` /
         ``finish_reason`` metadata, depending on the mlx_lm version.
+        ``retrieved`` behaves as in :meth:`generate`.
         """
         self._ensure_model()
-        retrieved = self.retrieve(feature_record) if use_rag else None
-        prompt = self.build_prompt(feature_record, retrieved=retrieved)
+        if retrieved is None and use_rag:
+            retrieved = self.retrieve(feature_record)
+        prompt = self.build_prompt(feature_record, retrieved=retrieved or None)
         from mlx_lm import stream_generate as mlx_stream
 
         for response in mlx_stream(

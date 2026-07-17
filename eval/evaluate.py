@@ -120,9 +120,11 @@ def compute_accuracy(
     ground_truth : list[FeatureRecord]
         List of ground-truth ``FeatureRecord`` objects.
     tolerances : dict, optional
-        Dict mapping field name to absolute tolerance. Default tolerances:
-        ``shedding_frequency_hz``: 15% relative, ``strouhal_number``: 0.05,
-        ``rms_amplitude_over_c``: 0.02, ``mode_number``: 0 (exact).
+        Dict mapping field name to a tolerance spec: ``("rel", x)`` for
+        relative tolerance, ``("abs", x)`` for absolute, or a bare number
+        (0 = exact match, otherwise absolute). Defaults:
+        ``shedding_frequency_hz``: 15% relative, ``strouhal_number``: ±0.05,
+        ``rms_amplitude_over_c``: ±0.02, ``mode_number``: exact.
 
     Returns
     -------
@@ -131,9 +133,9 @@ def compute_accuracy(
     """
     if tolerances is None:
         tolerances = {
-            "shedding_frequency_hz": 0.15,  # 15% relative
-            "strouhal_number": 0.05,
-            "rms_amplitude_over_c": 0.02,
+            "shedding_frequency_hz": ("rel", 0.15),
+            "strouhal_number": ("abs", 0.05),
+            "rms_amplitude_over_c": ("abs", 0.02),
             "mode_number": 0,  # exact
         }
 
@@ -158,18 +160,20 @@ def compute_accuracy(
             total += 1
 
             if field in tolerances:
-                tol = tolerances[field]
-                if tol == 0:
+                spec = tolerances[field]
+                if isinstance(spec, tuple):
+                    kind, tol = spec
+                else:
+                    kind, tol = ("exact", 0) if spec == 0 else ("abs", spec)
+                if kind == "exact":
                     is_correct = pred_val == gt_val
-                elif tol < 1.0:  # relative tolerance
+                elif kind == "rel":
                     if abs(gt_val) > 1e-10:
-                        err = abs(pred_val - gt_val) / abs(gt_val)
-                        is_correct = err <= tol
+                        is_correct = abs(pred_val - gt_val) / abs(gt_val) <= tol
                     else:
                         is_correct = abs(pred_val) <= tol
                 else:  # absolute tolerance
-                    err = abs(pred_val - gt_val)
-                    is_correct = err <= tol
+                    is_correct = abs(pred_val - gt_val) <= tol
             else:
                 is_correct = False
 
@@ -228,9 +232,9 @@ def evaluate(
 
     freq_tol = config.get("freq_tolerance", 0.15)
     tolerances = {
-        "shedding_frequency_hz": freq_tol,
-        "strouhal_number": 0.05,
-        "rms_amplitude_over_c": 0.02,
+        "shedding_frequency_hz": ("rel", freq_tol),
+        "strouhal_number": ("abs", 0.05),
+        "rms_amplitude_over_c": ("abs", 0.02),
         "mode_number": 0,
     }
 

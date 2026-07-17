@@ -149,11 +149,12 @@ def interpret_experiment(
     index). Loads the local model on first call (~30s).
     """
     from eval.validate_output import validate_output
+    from features.extract import check_physical_consistency
 
     fr = _build_record(feature_record)
     runner = _get_runner()
     retrieved = runner.retrieve(fr) if use_rag else []
-    text = runner.generate(fr, use_rag=bool(retrieved), max_tokens=max_tokens)
+    text = runner.generate(fr, retrieved=retrieved, max_tokens=max_tokens)
     result = validate_output(text)
     return {
         "interpretation": text,
@@ -161,6 +162,7 @@ def interpret_experiment(
         "valid": result.valid,
         "errors": result.errors,
         "warnings": result.warnings,
+        "record_consistency_warnings": check_physical_consistency(fr),
         "used_rag": bool(retrieved),
         "citations": _citations(retrieved),
     }
@@ -225,6 +227,69 @@ def validate_interpretation(text: str) -> Dict[str, Any]:
     from eval.validate_output import validate_output
 
     return asdict(validate_output(text))
+
+
+@mcp.tool()
+def check_experiment_consistency(feature_record: Dict[str, Any]) -> Dict[str, Any]:
+    """Physics-check a FeatureRecord without loading any model.
+
+    Runs two independent validators: (1) range_warnings — every field vs its
+    documented physical range (units-bug detector, e.g. Hz vs rad/s); and
+    (2) check_physical_consistency — cross-field physics (reported St vs
+    f_shed*c/U, lock-in label vs actual frequency ratio, damping ratio vs
+    spectral bandwidth, coherence phase). Instant; use before trusting or
+    interpreting any record.
+    """
+    from features.extract import check_physical_consistency
+
+    fr = _build_record(feature_record)
+    range_warns = fr.range_warnings()
+    physics_warns = check_physical_consistency(fr)
+    return {
+        "consistent": not (range_warns or physics_warns),
+        "range_warnings": range_warns,
+        "physics_warnings": physics_warns,
+    }
+
+
+@mcp.tool()
+def sweep_regime_map(
+    feature_record: Dict[str, Any],
+    param: str = "reduced_velocity",
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    n: int = 15,
+) -> Dict[str, Any]:
+    """What-if analysis: sweep one parameter and map the predicted regimes.
+
+    Varies ``param`` (reduced_velocity, angle_of_attack_deg, or
+    natural_frequency_hz) across [lo, hi] (sensible defaults when omitted),
+    rescales physically coupled quantities, and classifies the regime at each
+    point with the transparent rule-based classifier. Returns the per-point
+    regimes plus detected transition boundaries (e.g. the lock-in window).
+    No model load — instant.
+    """
+    from features.sweep import find_transitions, sweep_parameter
+
+    fr = _build_record(feature_record)
+    points = sweep_parameter(fr, param=param, lo=lo, hi=hi, n=n)
+    return {
+        "param": param,
+        "points": [
+            {
+                "value": round(pt.value, 4),
+                "regime": pt.regime.value,
+                "confidence": round(pt.confidence, 3),
+                "shedding_frequency_hz": round(pt.shedding_frequency_hz, 3),
+                "lock_in": pt.lock_in,
+            }
+            for pt in points
+        ],
+        "transitions": [
+            {"value": round(v, 4), "from": frm.value, "to": to.value}
+            for v, frm, to in find_transitions(points)
+        ],
+    }
 
 
 @mcp.tool()
