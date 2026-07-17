@@ -204,6 +204,8 @@ opened in this directory. For Claude Desktop, add to
 | `ask_question` | Free-text Q&A grounded in a FeatureRecord + retrieved literature | Yes |
 | `search_literature` | FAISS search over the indexed FSI paper corpus | No (embedder only) |
 | `validate_interpretation` | Parse + physics-check any generated interpretation | No |
+| `check_experiment_consistency` | Range + cross-field physics check of a FeatureRecord (units-bug detector) | No |
+| `sweep_regime_map` | What-if sweep of U*/AoA/f_n → regime map + transition boundaries | No |
 | `generate_synthetic_experiment` | Demo FeatureRecord for a chosen flow regime | No |
 
 **Resources:** `fsi://schema/feature_record` — the FeatureRecord JSON schema.
@@ -237,6 +239,7 @@ python cli.py <command> [options]
 | `serve` | Start the FastAPI inference server |
 | `ui` | Launch the Gradio web UI |
 | `mcp` | Start the MCP server (stdio) for Claude Desktop/Code |
+| `demo` | Instant end-to-end terminal demo (no model): generate → extract → interpret → validate all 5 regimes; `--sweep` adds a U* regime map |
 
 Each command accepts `--config-path` to specify a custom YAML configuration file (default: `configs/default.yaml`).
 
@@ -386,6 +389,41 @@ The evaluation harness (`eval/evaluate.py`) reports:
 | **Avg Field Accuracy** | Average across all numeric fields |
 
 With-vs-without-RAG comparison is supported via `evaluate_with_rag()`.
+
+Tolerance semantics are explicit per field: shedding frequency is judged at
+15% *relative* tolerance, Strouhal number at ±0.05 *absolute*, RMS amplitude
+at ±0.02 *absolute*, and mode number must match exactly.
+
+`python cli.py eval` writes both `eval_results.json` and a
+presentation-ready `eval_results.md` report (summary table, per-field
+accuracy, regime confusion matrix, per-class precision/recall/F1, lock-in
+detection) via `eval/report.py`.
+
+### Regime score breakdown
+
+`Data.describe.regime_scores(fr)` scores **all five** regimes for a record
+(normalized to sum to 1; the winner keeps its calibrated confidence, the
+rest share the remaining mass proportionally to raw evidence). Shown as a
+bar breakdown in the Gradio Quick Summary.
+
+### What-if parameter sweeps
+
+`features/sweep.py` maps predicted regimes across a range of one operating
+parameter — `reduced_velocity`, `angle_of_attack_deg`, or
+`natural_frequency_hz` — rescaling physically coupled quantities (U* sweep
+holds St and f_n fixed, so U, Re, and f_shed scale together). Detects regime
+transition boundaries, e.g. the lock-in window. Available as a Gradio tab
+("What-if sweep"), the MCP tool `sweep_regime_map`, and `cli.py demo --sweep`.
+
+### Physics consistency checks
+
+Beyond schema range checks (`FeatureRecord.range_warnings()`), the pipeline
+cross-validates the record against itself via
+`features.extract.check_physical_consistency()`: reported St vs. f·c/U,
+lock-in label vs. actual frequency ratio, damping ratio vs. spectral
+bandwidth, and coherence phase physics. These warnings surface in the Gradio
+UI (Tab 2), the FastAPI `/infer` response, and the MCP
+`interpret_experiment` tool as `record_consistency_warnings`.
 
 ---
 

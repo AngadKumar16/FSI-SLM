@@ -254,15 +254,6 @@ def extract_features(raw: RawExperiment) -> FeatureRecord:
     st = f_shed * c.chord_m / c.freestream_velocity_m_s if c.freestream_velocity_m_s > 0 else 0.0
     pod = pod_energy_fractions(snapshots_to_array(raw), n_modes=4)
 
-    piv = PIVDerived(
-        shedding_frequency_hz=f_shed,
-        strouhal_number=float(np.clip(st, 0.0, 1.0)),
-        wake_width_over_c=raw.wake_width_over_c,
-        separation_location_x_over_c=raw.separation_location_x_over_c,
-        pod_mode_amplitudes=pod,
-        turbulent_kinetic_energy=raw.turbulent_kinetic_energy,
-    )
-
     # --- structure ---
     disp = np.asarray(raw.structural_displacement_signal, dtype=float)
     f_struct, _ = dominant_frequency(disp, fs)
@@ -307,8 +298,6 @@ def extract_features(raw: RawExperiment) -> FeatureRecord:
     )
 
     # --- coherence ---
-    cl = np.asarray(raw.cl_signal, dtype=float)
-    cd = np.asarray(raw.cd_signal, dtype=float)
     coh_peak, phase_deg, coh_freq = cross_spectral_coherence(disp, cl, fs)
     coh_peak_cd, _, _ = cross_spectral_coherence(disp, cd, fs)
     piv = PIVDerived(

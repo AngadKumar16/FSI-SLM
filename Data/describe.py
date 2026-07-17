@@ -132,7 +132,12 @@ def classify_regime_confidence(fr: FeatureRecord) -> Tuple[FlowRegime, float, di
         weights["wake_width"] = 0.30
         weights["amplitude"] = 0.20
         weights["turbulence"] = 0.10
-        confidence = 0.7 + 0.2 * max(p.wake_width_over_c / 1.0, p.separation_location_x_over_c / 0.6)
+        # Evidence grows with a wider wake and with EARLIER separation
+        # (smaller x/c), so the separation term uses 1 - x/c.
+        confidence = 0.7 + 0.2 * max(
+            min(p.wake_width_over_c / 1.0, 1.0),
+            1.0 - p.separation_location_x_over_c,
+        )
     else:
         regime = FlowRegime.ATTACHED
         weights["inverse_separation"] = 0.40
@@ -154,6 +159,51 @@ def classify_regime(fr: FeatureRecord) -> FlowRegime:
     """Backward-compatible wrapper returning just the regime."""
     regime, _, _ = classify_regime_confidence(fr)
     return regime
+
+
+def regime_scores(fr: FeatureRecord) -> dict:
+    """Score ALL five regimes for a record, normalized to sum to 1.
+
+    The winning regime (from :func:`classify_regime_confidence`) keeps its
+    calibrated confidence; the remaining probability mass is distributed over
+    the other regimes proportionally to their raw evidence. Guarantees
+    ``argmax(regime_scores(fr)) == classify_regime(fr)``.
+
+    Returns
+    -------
+    dict[FlowRegime, float]
+        Normalized score per regime, most-likely first when iterated sorted.
+    """
+    s = fr.structure
+    p = fr.piv
+    c = fr.conditions
+    fn = s.natural_frequency_hz
+    f_shed = p.shedding_frequency_hz
+    amp = s.rms_amplitude_over_c
+    ratio = (fn / f_shed) if f_shed > 0 else 10.0
+
+    # Raw (uncalibrated) evidence per regime, each in [0, 1].
+    evidence = {
+        FlowRegime.GALLOPING: min(amp / 0.3, 1.0) * (1.0 if ratio < 0.5 else max(0.0, 1.0 - (ratio - 0.5) * 2)),
+        FlowRegime.VIV_LOCKIN: min(amp / 0.3, 1.0) * max(0.0, 1.0 - abs(ratio - 1.0) / 0.3),
+        FlowRegime.STALL_FLUTTER: min(amp / 0.3, 1.0) * min(max((c.angle_of_attack_deg - 8.0) / 8.0, 0.0), 1.0),
+        FlowRegime.SEPARATED: max(1.0 - p.separation_location_x_over_c, min(p.wake_width_over_c / 1.5, 1.0)) * max(0.0, 1.0 - amp / 0.15),
+        FlowRegime.ATTACHED: max(0.0, p.separation_location_x_over_c - 0.6) / 0.4 * max(0.0, 1.0 - amp / 0.05),
+    }
+
+    winner, confidence, _ = classify_regime_confidence(fr)
+    others = {r: e for r, e in evidence.items() if r != winner}
+    total = sum(others.values())
+    remaining = 1.0 - confidence
+    scores = {}
+    for r in FlowRegime:
+        if r == winner:
+            scores[r] = confidence
+        elif total > 0:
+            scores[r] = remaining * others[r] / total
+        else:
+            scores[r] = remaining / (len(FlowRegime) - 1)
+    return scores
 
 
 def amplitude_trend(fr: FeatureRecord, regime: FlowRegime) -> AmplitudeTrend:
@@ -292,4 +342,10 @@ def _maybe_paraphrase(text: str) -> Optional[str]:
         return None
 
 
-__all__ = ["describe", "classify_regime", "classify_regime_confidence", "amplitude_trend"]
+__all__ = [
+    "describe",
+    "classify_regime",
+    "classify_regime_confidence",
+    "regime_scores",
+    "amplitude_trend",
+]

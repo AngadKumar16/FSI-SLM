@@ -418,6 +418,13 @@ def eval(
         json.dump(results, f, indent=2)
     print(f"\n[cli] Results saved to {out_path}")
 
+    # Presentation-ready markdown report next to the JSON.
+    from eval.report import render_markdown_report
+
+    report_path = out_path.with_suffix(".md")
+    report_path.write_text(render_markdown_report(results))
+    print(f"[cli] Markdown report saved to {report_path}")
+
 
 def infer(
     feature_record: str,
@@ -503,7 +510,7 @@ def infer(
                 print(f"\n[cli] Streaming prediction ({predictor_name_to_label(adapter_path, use_rag)}):", flush=True)
                 print("-" * 60, flush=True)
                 pieces: list = []
-                for response in runner.stream(fr, use_rag=use_rag, max_tokens=max_tokens):
+                for response in runner.stream(fr, retrieved=retrieved, max_tokens=max_tokens):
                     piece = getattr(response, "text", "") or ""
                     pieces.append(piece)
                     if not json_output:
@@ -513,7 +520,7 @@ def infer(
                 prediction = "".join(pieces)
                 print("-" * 60, flush=True)
             else:
-                prediction = runner.generate(fr, use_rag=use_rag, max_tokens=max_tokens)
+                prediction = runner.generate(fr, retrieved=retrieved, max_tokens=max_tokens)
         predictor_name = predictor_name_to_label(adapter_path, use_rag)
 
     # Validate
@@ -648,6 +655,67 @@ def mcp(config_path: str = "configs/default.yaml") -> None:
     mcp_main()
 
 
+def demo(seed: int = 0, sweep: bool = False) -> None:
+    """End-to-end terminal demo: no model, no downloads, runs in seconds.
+
+    For each of the five flow regimes: generate a synthetic experiment,
+    extract features, produce the rule-based interpretation, and validate it.
+    Prints a summary table (true vs predicted regime, St, lock-in, validator
+    verdict). With ``--sweep``, also prints a reduced-velocity regime sweep
+    for the VIV record showing the predicted lock-in window.
+
+    Parameters
+    ----------
+    seed : int
+        Seed for the synthetic generator (deterministic per seed).
+    sweep : bool
+        Also demo the what-if parameter sweep (regime map vs U*).
+    """
+    import numpy as np
+
+    from Data.describe import classify_regime_confidence, describe
+    from Data.schema import FlowRegime
+    from Data.synthetic import generate_experiment
+    from eval.validate_output import validate_output
+    from features.extract import extract_features
+
+    print(f"[demo] seed={seed} — generate → extract → interpret → validate\n")
+    header = f"{'true regime':<15} {'predicted':<15} {'conf':<6} {'St':<7} {'lock-in':<12} valid"
+    print(header)
+    print("-" * len(header))
+
+    correct = 0
+    viv_record = None
+    for i, regime in enumerate(FlowRegime):
+        raw = generate_experiment(regime, rng=np.random.default_rng(seed + i))
+        fr = extract_features(raw)
+        pred, conf, _ = classify_regime_confidence(fr)
+        ok = validate_output(describe(fr)).valid
+        if pred == regime:
+            correct += 1
+        if regime == FlowRegime.VIV_LOCKIN:
+            viv_record = fr
+        print(
+            f"{regime.value:<15} {pred.value:<15} {conf:<6.2f} "
+            f"{fr.piv.strouhal_number:<7.3f} {fr.lock_in_status().value:<12} {ok}"
+        )
+
+    print(f"\n[demo] {correct}/{len(FlowRegime)} regimes recovered by the rule-based classifier")
+
+    if sweep and viv_record is not None:
+        from features.sweep import find_transitions, sweep_parameter
+
+        print("\n[demo] What-if sweep: reduced velocity U* ∈ [2, 12] on the VIV record")
+        points = sweep_parameter(viv_record, "reduced_velocity", n=11)
+        for pt in points:
+            print(
+                f"  U*={pt.value:5.2f}  ->  {pt.regime.value:<15} "
+                f"(conf {pt.confidence:.2f}, lock-in: {pt.lock_in})"
+            )
+        for value, frm, to in find_transitions(points):
+            print(f"[demo] transition at U*≈{value:.2f}: {frm.value} -> {to.value}")
+
+
 def main() -> None:
     """Main entry point - dispatches to subcommands via fire.Fire."""
     import fire
@@ -661,6 +729,7 @@ def main() -> None:
         "serve": serve,
         "ui": ui,
         "mcp": mcp,
+        "demo": demo,
     })
 
 
@@ -679,5 +748,6 @@ __all__ = [
     "serve",
     "ui",
     "mcp",
+    "demo",
     "main",
 ]

@@ -242,7 +242,7 @@ def generate_experiment(
         cl_mean *= 0.6  # lift loss past stall
     cl_rms = _u(rng, *plan.cl_rms_range)
     cd_mean = _u(rng, *plan.cd_mean_range)
-    cd_rms = cd_rms = _u(rng, 0.3, 0.8) * cl_rms
+    cd_rms = _u(rng, 0.3, 0.8) * cl_rms
     cm_mean = -0.05 - 0.02 * camber * 100
     cm_rms = _u(rng, 0.2, 0.6) * cl_rms
 

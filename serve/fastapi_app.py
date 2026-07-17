@@ -139,12 +139,14 @@ def create_app(
         try:
             text = runner.generate(
                 fr,
-                use_rag=bool(request.use_rag and retrieved),
+                retrieved=retrieved,
                 max_tokens=request.max_tokens,
             )
         except Exception as e:  # noqa: BLE001
             logger.exception("Inference failed")
             raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
+
+        from features.extract import check_physical_consistency
 
         result = validate_output(text)
         return {
@@ -153,6 +155,7 @@ def create_app(
             "valid": result.valid,
             "errors": result.errors,
             "warnings": result.warnings,
+            "record_consistency_warnings": check_physical_consistency(fr),
             "used_rag": bool(request.use_rag and retrieved),
             "citations": _citations(retrieved),
         }
@@ -169,7 +172,7 @@ def create_app(
             try:
                 for response in runner.stream(
                     fr,
-                    use_rag=bool(request.use_rag and retrieved),
+                    retrieved=retrieved,
                     max_tokens=request.max_tokens,
                 ):
                     text_piece = getattr(response, "text", "") or ""
