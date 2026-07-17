@@ -364,7 +364,7 @@ export MLX_GPU_BUFFER_CACHE_SIZE=2048
 - [ ] Backup adapter weights regularly
 
 ---
-
+ 
 ## Quick Reference
 
 | Task | Command |
