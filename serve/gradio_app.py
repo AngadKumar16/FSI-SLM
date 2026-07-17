@@ -24,6 +24,35 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 
+# --------------------------------------------------------------------------- #
+# Compatibility shim: gradio 4.37's client chokes on JSON schemas that use a
+# bare boolean (e.g. ``additionalProperties: true``, produced by pydantic for
+# dict-typed fields) -- ``TypeError: argument of type 'bool' is not iterable``
+# inside ``get_type``/``_json_schema_to_python_type``. That crashes the main
+# page route (api_info) and aborts ``launch()``. Wrap both helpers to treat a
+# boolean schema as "Any". Safe no-op on fixed gradio versions.
+# --------------------------------------------------------------------------- #
+import gradio_client.utils as _gcu  # noqa: E402
+
+_orig_get_type = _gcu.get_type
+_orig_js2pt = _gcu._json_schema_to_python_type
+
+
+def _safe_get_type(schema):
+    if isinstance(schema, bool):
+        return "Any"
+    return _orig_get_type(schema)
+
+
+def _safe_js2pt(schema, defs=None):
+    if isinstance(schema, bool):
+        return "Any"
+    return _orig_js2pt(schema, defs)
+
+
+_gcu.get_type = _safe_get_type
+_gcu._json_schema_to_python_type = _safe_js2pt
+
 from Data.describe import (
     classify_regime,
     describe as _describe_fn,
