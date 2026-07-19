@@ -639,6 +639,7 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
     with gr.Blocks(title="FSI-SLM Interpreter") as demo:
         gr.Markdown(
             "# FSI-SLM Interpreter\n"
+            "TAMUK 2026\n"
             "Provide real fluid-structure-interaction measurements, then get a "
             "structured interpretation or ask free-text questions about the "
             "record. The feature record is the only source of truth for measured "
