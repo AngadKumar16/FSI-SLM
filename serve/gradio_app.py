@@ -18,6 +18,7 @@ Both paths share one :class:`~inference.runner.InferenceRunner`. Launch via
 
 from __future__ import annotations
 
+import html
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -165,6 +166,123 @@ def _record_status(fr: FeatureRecord) -> str:
     )
 
 
+def _info(text: str, color: str = "#1a1a1a") -> str:
+    """Hoverable ⓘ badge: native browser tooltip via the `title` attr, no JS."""
+    t = html.escape(text, quote=True)
+    return (
+        f"<span title=\"{t}\" style='cursor:help; color:{color}!important; "
+        f"opacity:0.7; font-size:12px; border:1px solid {color}; border-radius:50%; "
+        "width:15px; height:15px; display:inline-flex; align-items:center; "
+        "justify-content:center; margin-left:6px; vertical-align:middle; "
+        "font-family:serif;'>i</span>"
+    )
+
+
+_BOX_INFO = {
+    "regime": (
+        "Classified flow regime. 5 possible values: (1) Attached flow — boundary "
+        "layer stays attached, low unsteady loading, no coherent instability. "
+        "(2) Separated flow — flow separates early / wide broadband wake, but no "
+        "sustained resonant structural response. (3) VIV lock-in — shedding "
+        "frequency has synchronized (within ~10%) with the structure's natural "
+        "frequency, driving a resonant, amplitude-saturated limit cycle. "
+        "(4) Galloping — growing-amplitude instability from negative aerodynamic "
+        "damping, structural frequency well below (<50% of) shedding frequency. "
+        "(5) Stall flutter — large single-mode limit cycle from dynamic stall at "
+        "high angle of attack (>=12 degrees). Checked in that priority order."
+    ),
+    "frequency": (
+        "Raw frequency data feeding the regime call. Shedding frequency = "
+        "dominant wake tone from PIV/FFT. Strouhal number St = f_shed * chord / "
+        "freestream_velocity — dimensionless shedding rate; ~0.2 is the classic "
+        "2D bluff-body baseline, so a big deviation flags an unusual shape, a "
+        "non-shedding-dominated regime, or a possible units error. Structural "
+        "natural frequency is shown alongside for direct comparison against "
+        "shedding frequency (see Lock-In Status)."
+    ),
+    "lockin": (
+        "Ratio = f_shed / f_natural, three possible states. locked: ratio in "
+        "0.90-1.10 (within 10%) — shedding has synchronized with the structure, "
+        "i.e. resonance; this is what defines VIV lock-in. near lock-in: ratio "
+        "in 0.80-1.20 but outside the locked band — approaching resonance, not "
+        "fully synced. unlocked: ratio outside 0.80-1.20 — frequencies are "
+        "independent, no synchronization."
+    ),
+    "amplitude": (
+        "Oscillation amplitude trend (RMS displacement / chord), assigned from "
+        "the classified regime. negligible: RMS/c < 0.01, no meaningful motion. "
+        "growing: assigned for galloping — amplitude increases without an "
+        "obvious ceiling until structural nonlinearity intervenes. saturated: "
+        "assigned for VIV lock-in and stall flutter — amplitude has plateaued "
+        "into a stable, bounded limit cycle. decaying: assigned for separated "
+        "flow — any structural response is dying out, not sustained."
+    ),
+    "mode_shape": (
+        "Which structural vibration mode dominates (mode_number) and its "
+        "physical deflection shape. Mode 1 is typically first bending/heave — "
+        "whole structure moves up-down together, no internal node. Higher mode "
+        "numbers correspond to higher-order shapes (e.g. torsion, S-shaped "
+        "bending with internal nodes); which mode is excited changes where "
+        "peak stress occurs on the structure."
+    ),
+    "gauge": (
+        "Visual version of Lock-In Status: track spans ratio f_shed/f_natural "
+        "from 0.5 to 1.5. Green band (0.90-1.10) = locked/resonant. Amber bands "
+        "(0.80-0.90 and 1.10-1.20) = near lock-in. Grey outside amber = "
+        "unlocked. Black marker = this record's exact ratio. Dead center of "
+        "green (ratio = 1.0) is perfect resonance."
+    ),
+    "pod": (
+        "Proper Orthogonal Decomposition (POD) splits the wake's spatial "
+        "velocity field into orthogonal energy modes ranked by kinetic energy "
+        "share — this is a FLUID/wake mode decomposition, separate from the "
+        "structural mode_number in the Mode Shape card. Bars = each mode's "
+        "amplitude, normalized to the largest. Mode 1 holding most energy "
+        "(e.g. >60%) means one coherent structure (clean periodic shedding). "
+        "Energy spread evenly across many modes means a more complex, "
+        "turbulent, or noisy wake that resists a single-frequency description."
+    ),
+    "confidence": (
+        "Composite trust score for the regime call, built from 4 signals. "
+        "Classifier confidence [0,1]: how strongly this record satisfies the "
+        "winning regime's decision rule. Margin over runner-up: gap between "
+        "the winner's score and the 2nd-most-likely regime in the breakdown "
+        "below — small margin (<0.15) means the record sits near a decision "
+        "boundary and could flip with slightly different inputs. Range/"
+        "consistency warnings: count of fields outside physically expected "
+        "bounds or mutually inconsistent (e.g. a units mismatch) — each one "
+        "lowers trust. Noise/signal-quality flags: only available when the "
+        "record has real spectral stats (skewness, kurtosis, spectral "
+        "kurtosis, coherence) from an uploaded RawExperiment/PIV signal, not "
+        "manual entry — flags asymmetric/impulsive signals, flat/broadband "
+        "spectra (weak tonal shedding), or weak structure-force coherence "
+        "(undermines the claimed mechanism). Overall: HIGH = confidence>0.75 "
+        "AND margin>0.3 AND 0 warnings AND 0 noise flags. LOW = confidence<0.5 "
+        "OR >=2 warnings OR >=2 noise flags. MEDIUM = everything in between."
+    ),
+    "key_insight": (
+        "One-line physical mechanism for why the classified regime occurs. "
+        "Fixed text per regime from a lookup table (not computed per-record) — "
+        "explains the underlying physics, not this record's specific numbers."
+    ),
+    "score_breakdown": (
+        "Normalized likelihood for all 5 possible regimes on this record; "
+        "scores sum to 1.0. The winning regime keeps its calibrated confidence "
+        "score; the rest of the probability mass (1 - confidence) is split "
+        "across the other 4 regimes proportional to each one's own raw "
+        "rule-based evidence. One tall bar with the rest near-zero = "
+        "unambiguous call. Several comparable bars = the record sits near a "
+        "multi-way boundary — treat the top regime as a best guess, not a "
+        "certainty."
+    ),
+    "summary_lockin_amp": (
+        "Compact restatement of Lock-In Status and Amplitude Response — "
+        "hover the full cards further down this page for the complete "
+        "definitions of every possible value."
+    ),
+}
+
+
 def _passages_markdown(retrieved: List) -> str:
     """Render retrieved RAG passages as a citation block."""
     if not retrieved:
@@ -264,36 +382,49 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             "|---|---|---|---|",
         ]
 
+        freq_ratio = (s.natural_frequency_hz / p.shedding_frequency_hz) if p.shedding_frequency_hz else 0.0
+        cl_ratio = (f.cl_rms / f.cl_mean) if f.cl_mean else float("inf")
+
         # Flow conditions
-        lines.append(f"| **Conditions** | Reynolds number | {c.reynolds_number:.2e} | |")
-        lines.append(f"| | Angle of attack | {c.angle_of_attack_deg:.1f}° | |")
+        re_note = (
+            "laminar/transitional" if c.reynolds_number < 3e5
+            else "subcritical turbulent" if c.reynolds_number < 3.5e5
+            else "critical/supercritical turbulent"
+        )
+        lines.append(f"| **Conditions** | Reynolds number | {c.reynolds_number:.2e} | {re_note} |")
+        aoa_note = (
+            "near/past static stall (≥12°)" if c.angle_of_attack_deg >= 12.0
+            else "attached-flow range" if c.angle_of_attack_deg < 8.0
+            else "approaching stall"
+        )
+        lines.append(f"| | Angle of attack | {c.angle_of_attack_deg:.1f}° | {aoa_note} |")
         lines.append(f"| | Freestream velocity | {c.freestream_velocity_m_s:.2f} m/s | |")
-        lines.append(f"| | Reduced velocity (U*) | {c.reduced_velocity:.2f} | |")
-        lines.append(f"| | Chord | {c.chord_m:.3f} m | |")
+        lines.append(f"| | Reduced velocity (U*) | {c.reduced_velocity:.2f} | {'lock-in-prone band (4-8)' if 4.0 <= c.reduced_velocity <= 8.0 else 'outside typical lock-in band'} |")
+        lines.append(f"| | Chord | {c.chord_m:.3f} m | reference length for all `/c` quantities |")
 
         # PIV
-        lines.append(f"| **PIV** | Shedding frequency | {p.shedding_frequency_hz:.2f} Hz | Dominant |")
-        lines.append(f"| | Strouhal number | {p.strouhal_number:.3f} | St = fD/U |")
-        lines.append(f"| | Wake width | {p.wake_width_over_c:.3f}c | >0.6 suggests separation |")
-        lines.append(f"| | Separation location | {p.separation_location_x_over_c:.3f}c | <0.6 is early |")
-        lines.append(f"| | Turbulent KE | {p.turbulent_kinetic_energy:.4f} | |")
+        lines.append(f"| **PIV** | Shedding frequency | {p.shedding_frequency_hz:.2f} Hz | Dominant wake tone |")
+        lines.append(f"| | Strouhal number | {p.strouhal_number:.3f} | St = fD/U; ~0.2 bluff-body baseline, this deviates {'a lot — check regime' if abs(p.strouhal_number - 0.2) > 0.15 else 'modestly'} |")
+        lines.append(f"| | Wake width | {p.wake_width_over_c:.3f}c | {'>0.6 → separated/bluff wake' if p.wake_width_over_c > 0.6 else 'narrow, attached-like wake'} |")
+        lines.append(f"| | Separation location | {p.separation_location_x_over_c:.3f}c | {'<0.6 → early separation' if p.separation_location_x_over_c < 0.6 else 'separation delayed toward TE'} |")
+        lines.append(f"| | Turbulent KE | {p.turbulent_kinetic_energy:.4f} | {'elevated — noisy wake' if p.turbulent_kinetic_energy > 0.1 else 'low, coherent wake'} |")
 
         # Structure
-        lines.append(f"| **Structure** | RMS amplitude | {s.rms_amplitude_over_c:.4f}c | {trend.value} |")
-        lines.append(f"| | Dominant frequency | {s.dominant_frequency_hz:.2f} Hz | |")
-        lines.append(f"| | Natural frequency | {s.natural_frequency_hz:.2f} Hz | |")
+        lines.append(f"| **Structure** | RMS amplitude | {s.rms_amplitude_over_c:.4f}c | trend: {trend.value} |")
+        lines.append(f"| | Dominant frequency | {s.dominant_frequency_hz:.2f} Hz | response frequency of structure |")
+        lines.append(f"| | Natural frequency | {s.natural_frequency_hz:.2f} Hz | f_n/f_shed = {freq_ratio:.2f} |")
         lines.append(f"| | Mode number | {int(s.mode_number)} | {_mode_shape_phrase(fr)} |")
-        lines.append(f"| | Camber | {s.camber:.3f} | |")
+        lines.append(f"| | Camber | {s.camber:.3f} | {'notable camber, expect mean-lift offset' if abs(s.camber) > 0.03 else 'near-symmetric section'} |")
 
         # Forces
-        lines.append(f"| **Forces** | CL mean | {f.cl_mean:.3f} | |")
-        lines.append(f"| | CL rms | {f.cl_rms:.3f} | |")
-        lines.append(f"| | CL dom. freq | {f.cl_dominant_frequency_hz:.2f} Hz | |")
-        lines.append(f"| | CD mean | {f.cd_mean:.3f} | |")
-        lines.append(f"| | CD rms | {f.cd_rms:.3f} | |")
-        lines.append(f"| | CD dom. freq | {f.cd_dominant_frequency_hz:.2f} Hz | |")
-        lines.append(f"| | CM mean | {f.cm_mean:.4f} | |")
-        lines.append(f"| | CM rms | {f.cm_rms:.4f} | |")
+        lines.append(f"| **Forces** | CL mean | {f.cl_mean:.3f} | steady lift coefficient |")
+        lines.append(f"| | CL rms | {f.cl_rms:.3f} | unsteady/mean ratio = {cl_ratio:.2f} |")
+        lines.append(f"| | CL dom. freq | {f.cl_dominant_frequency_hz:.2f} Hz | {'matches shedding' if abs(f.cl_dominant_frequency_hz - p.shedding_frequency_hz) < 0.5 else 'offset from shedding freq'} |")
+        lines.append(f"| | CD mean | {f.cd_mean:.3f} | steady drag coefficient |")
+        lines.append(f"| | CD rms | {f.cd_rms:.3f} | drag unsteadiness |")
+        lines.append(f"| | CD dom. freq | {f.cd_dominant_frequency_hz:.2f} Hz | {'2x shedding (typical drag doubling)' if abs(f.cd_dominant_frequency_hz - 2 * p.shedding_frequency_hz) < 1.0 else ''} |")
+        lines.append(f"| | CM mean | {f.cm_mean:.4f} | pitching moment bias |")
+        lines.append(f"| | CM rms | {f.cm_rms:.4f} | pitching moment unsteadiness |")
         lines.append(f"| | CM dom. freq | {f.cm_dominant_frequency_hz:.2f} Hz | |")
 
         return "\n".join(lines)
@@ -321,41 +452,41 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         md = "<div style='display: flex; flex-direction: column; gap: 12px;'>\n\n"
 
         # Card 1: Regime
-        md += f"<div style='background: #f0f8ff; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #2196F3;'>\n"
-        md += f"<h3>{regime_emoji} Flow Regime</h3>\n"
-        md += f"<p style='font-size: 18px; margin: 4px 0;'><strong>{_REGIME_PHRASE[regime].title()}</strong></p>\n"
-        md += f"<p style='margin: 4px 0; color: #555;'>{_MECHANISM[regime]}</p>\n"
+        md += f"<div style='background:#f0f8ff!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid #2196F3;'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 4px 0;'>{regime_emoji} Flow Regime{_info(_BOX_INFO['regime'])}</h3>\n"
+        md += f"<p style='font-size: 18px; margin: 4px 0; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>{_REGIME_PHRASE[regime].title()}</strong></p>\n"
+        md += f"<p style='margin: 4px 0; color:#555!important;'>{_MECHANISM[regime]}</p>\n"
         md += "</div>\n\n"
 
         # Card 2: Frequency
-        md += f"<div style='background: #fff8e1; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #FFC107;'>\n"
-        md += f"<h3>📊 Frequency & Strouhal Number</h3>\n"
+        md += f"<div style='background:#fff8e1!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid #FFC107;'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 4px 0;'>📊 Frequency & Strouhal Number{_info(_BOX_INFO['frequency'])}</h3>\n"
         md += f"<table style='width: 100%; border-collapse: collapse;'>\n"
-        md += f"<tr><td style='padding: 6px;'><strong>Shedding frequency</strong></td><td style='padding: 6px; text-align: right;'><code>{p.shedding_frequency_hz:.2f} Hz</code></td></tr>\n"
-        md += f"<tr><td style='padding: 6px;'><strong>Strouhal number (St)</strong></td><td style='padding: 6px; text-align: right;'><code>{p.strouhal_number:.3f}</code></td></tr>\n"
-        md += f"<tr><td style='padding: 6px;'><strong>Structural natural freq</strong></td><td style='padding: 6px; text-align: right;'><code>{s.natural_frequency_hz:.2f} Hz</code></td></tr>\n"
+        md += f"<tr><td style='padding: 6px; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>Shedding frequency</strong></td><td style='padding: 6px; text-align: right; color:#1a1a1a!important;'><code>{p.shedding_frequency_hz:.2f} Hz</code></td></tr>\n"
+        md += f"<tr><td style='padding: 6px; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>Strouhal number (St)</strong></td><td style='padding: 6px; text-align: right; color:#1a1a1a!important;'><code>{p.strouhal_number:.3f}</code></td></tr>\n"
+        md += f"<tr><td style='padding: 6px; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>Structural natural freq</strong></td><td style='padding: 6px; text-align: right; color:#1a1a1a!important;'><code>{s.natural_frequency_hz:.2f} Hz</code></td></tr>\n"
         md += f"</table>\n"
         md += "</div>\n\n"
 
         # Card 3: Lock-in
         lock_color = "#4CAF50" if _LOCKIN_PHRASE[lock] == "locked" else ("#FF9800" if _LOCKIN_PHRASE[lock] == "near lock-in" else "#F44336")
-        md += f"<div style='background: #fce4ec; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid {lock_color};'>\n"
-        md += f"<h3>🔒 Lock-In Status</h3>\n"
-        md += f"<p style='font-size: 16px; margin: 4px 0;'><strong>{_LOCKIN_PHRASE[lock].title()}</strong></p>\n"
-        md += f"<p style='margin: 4px 0; color: #555;'>Shedding at {p.shedding_frequency_hz:.2f} Hz vs structural natural frequency {s.natural_frequency_hz:.2f} Hz</p>\n"
+        md += f"<div style='background:#fce4ec!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid {lock_color};'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 4px 0;'>🔒 Lock-In Status{_info(_BOX_INFO['lockin'])}</h3>\n"
+        md += f"<p style='font-size: 16px; margin: 4px 0; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>{_LOCKIN_PHRASE[lock].title()}</strong></p>\n"
+        md += f"<p style='margin: 4px 0; color:#555!important;'>Shedding at {p.shedding_frequency_hz:.2f} Hz vs structural natural frequency {s.natural_frequency_hz:.2f} Hz</p>\n"
         md += "</div>\n\n"
 
         # Card 4: Amplitude
-        md += f"<div style='background: #e8f5e9; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #4CAF50;'>\n"
-        md += f"<h3>📈 Amplitude Response</h3>\n"
-        md += f"<p style='margin: 4px 0;'><strong>Trend:</strong> <code>{trend.value}</code></p>\n"
-        md += f"<p style='margin: 4px 0;'><strong>RMS displacement:</strong> <code>{s.rms_amplitude_over_c:.4f}c</code></p>\n"
+        md += f"<div style='background:#e8f5e9!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid #4CAF50;'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 4px 0;'>📈 Amplitude Response{_info(_BOX_INFO['amplitude'])}</h3>\n"
+        md += f"<p style='margin: 4px 0; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>Trend:</strong> <code>{trend.value}</code></p>\n"
+        md += f"<p style='margin: 4px 0; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>RMS displacement:</strong> <code>{s.rms_amplitude_over_c:.4f}c</code></p>\n"
         md += "</div>\n\n"
 
         # Card 5: Mode shape
-        md += f"<div style='background: #f3e5f5; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #9C27B0;'>\n"
-        md += f"<h3>🎭 Mode Shape</h3>\n"
-        md += f"<p style='margin: 4px 0;'>{_mode_shape_phrase(fr)}</p>\n"
+        md += f"<div style='background:#f3e5f5!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid #9C27B0;'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 4px 0;'>🎭 Mode Shape{_info(_BOX_INFO['mode_shape'])}</h3>\n"
+        md += f"<p style='margin: 4px 0; color:#1a1a1a!important;'>{_mode_shape_phrase(fr)}</p>\n"
         md += "</div>\n\n"
 
         md += "</div>"
@@ -378,10 +509,10 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
             return max(0.0, min(1.0, (r - lo) / (hi - lo))) * 100
         amber_l, amber_r = _pct(0.8), _pct(1.2)
         green_l, green_r = _pct(0.9), _pct(1.1)
-        md = "<div style='background: #fce4ec; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #E91E63;'>\n"
-        md += "<h3>🎯 Frequency Lock-In Gauge</h3>\n"
+        md = "<div style='background:#fce4ec!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid #E91E63;'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 4px 0;'>🎯 Frequency Lock-In Gauge{_info(_BOX_INFO['gauge'])}</h3>\n"
         md += (
-            f"<p style='margin: 4px 0; color: #555;'>Ratio "
+            f"<p style='margin: 4px 0; color:#555!important;'>Ratio "
             f"f<sub>shed</sub>/f<sub>n</sub> = <code>{ratio:.3f}</code> "
             f"({f_shed:.2f} Hz / {f_n:.2f} Hz)</p>\n"
         )
@@ -390,7 +521,7 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         md += f"<div style='position:absolute; left:{green_l:.1f}%; width:{green_r-green_l:.1f}%; top:0; bottom:0; background:#A5D6A7;'></div>\n"
         md += f"<div style='position:absolute; left:{pos:.1f}%; top:-4px; width:3px; height:34px; background:#000; transform:translateX(-1px);'></div>\n"
         md += "</div>\n"
-        md += "<div style='display:flex; justify-content:space-between; font-size:11px; color:#777;'><span>0.5</span><span>1.0 (locked)</span><span>1.5</span></div>\n"
+        md += "<div style='display:flex; justify-content:space-between; font-size:11px; color:#777!important;'><span style='color:#777!important;'>0.5</span><span style='color:#777!important;'>1.0 (locked)</span><span style='color:#777!important;'>1.5</span></div>\n"
         md += "</div>\n\n"
         return md
 
@@ -400,17 +531,76 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         if not amps:
             return ""
         mx = max(abs(a) for a in amps) or 1.0
-        md = "<div style='background: #e3f2fd; color: #1a1a1a; padding: 12px; border-radius: 8px; border-left: 4px solid #1976D2;'>\n"
-        md += "<h3>🌊 POD Mode Energy Spectrum</h3>\n"
+        mode1_frac = abs(amps[0]) / sum(abs(a) for a in amps) if sum(abs(a) for a in amps) else 0.0
+        md = "<div style='background:#e3f2fd!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid #1976D2;'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 4px 0;'>🌊 POD Mode Energy Spectrum{_info(_BOX_INFO['pod'])}</h3>\n"
+        md += f"<p style='margin:2px 0 8px 0; font-size:12px; color:#555!important;'>Mode 1 carries {mode1_frac*100:.0f}% of resolved energy — {'single dominant coherent structure' if mode1_frac > 0.6 else 'energy spread across several modes (more complex/noisier wake)'}.</p>\n"
         for i, a in enumerate(amps):
             w = abs(a) / mx * 100
             md += "<div style='display:flex; align-items:center; gap:8px; margin:4px 0;'>\n"
-            md += f"<span style='width:56px; font-size:12px;'>Mode {i + 1}</span>\n"
+            md += f"<span style='width:56px; font-size:12px; color:#1a1a1a!important;'>Mode {i + 1}</span>\n"
             md += "<div style='flex:1; background:#eee; border-radius:6px; height:16px;'>\n"
             md += f"<div style='width:{w:.1f}%; height:16px; background:#1976D2; border-radius:6px;'></div>\n"
             md += "</div>\n"
-            md += f"<span style='width:52px; font-size:12px; text-align:right;'><code>{a:.3f}</code></span>\n"
+            md += f"<span style='width:52px; font-size:12px; text-align:right; color:#1a1a1a!important;'><code>{a:.3f}</code></span>\n"
             md += "</div>\n"
+        md += "</div>\n\n"
+        return md
+
+    def _build_confidence_card(fr: FeatureRecord) -> str:
+        """Consolidated confidence / noise-corruption indicator.
+
+        Combines: classifier confidence, margin over the runner-up regime
+        (ambiguity), count of range/consistency warnings, and — when the
+        record carries spectral stats (real PIV extraction, not manual
+        entry) — skewness/kurtosis/coherence as a noise proxy.
+        """
+        from Data.describe import classify_regime_confidence, regime_scores, _REGIME_PHRASE
+        from features.extract import check_physical_consistency
+
+        regime, confidence, _weights = classify_regime_confidence(fr)
+        scores = regime_scores(fr)
+        ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+        runner_up_margin = ranked[0][1] - ranked[1][1] if len(ranked) > 1 else 1.0
+
+        warns = fr.range_warnings() + check_physical_consistency(fr)
+
+        noise_bits = []
+        s = fr.structure
+        p = fr.piv
+        if s.spectrum is not None:
+            sp = s.spectrum
+            if abs(sp.skewness) > 1.0:
+                noise_bits.append(f"skewness {sp.skewness:.2f} — asymmetric, non-Gaussian response")
+            if sp.kurtosis > 5.0:
+                noise_bits.append(f"kurtosis {sp.kurtosis:.2f} — impulsive/intermittent signal")
+            if sp.spectral_kurtosis < 1.0:
+                noise_bits.append(f"spectral kurtosis {sp.spectral_kurtosis:.2f} — flat/broadband spectrum, weak tonal content")
+        if p.coherence is not None:
+            coh = p.coherence.cl_coherence_peak
+            if coh < 0.5:
+                noise_bits.append(f"CL coherence peak {coh:.2f} — weak structure/force coupling, low confidence in mechanism claim")
+
+        overall = "high" if (confidence > 0.75 and runner_up_margin > 0.3 and not warns and not noise_bits) else \
+                  "low" if (confidence < 0.5 or len(warns) >= 2 or len(noise_bits) >= 2) else "medium"
+        overall_color = {"high": "#4CAF50", "medium": "#FF9800", "low": "#F44336"}[overall]
+        overall_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}[overall]
+
+        md = f"<div style='background:#eceff1!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px; border-left: 4px solid {overall_color};'>\n"
+        md += f"<h3 style='color:#1a1a1a!important; margin:0 0 6px 0;'>{overall_emoji} Interpretation Confidence: {overall.upper()}{_info(_BOX_INFO['confidence'])}</h3>\n"
+        md += f"<p style='margin: 2px 0; color:#1a1a1a!important;'>Classifier confidence for <strong style='color:#1a1a1a!important;'>{_REGIME_PHRASE[regime]}</strong>: <code>{confidence:.2f}</code></p>\n"
+        md += f"<p style='margin: 2px 0; color:#1a1a1a!important;'>Margin over runner-up regime: <code>{runner_up_margin:.2f}</code>{' — close call, borderline classification' if runner_up_margin < 0.15 else ''}</p>\n"
+        md += f"<p style='margin: 2px 0; color:#1a1a1a!important;'>Range/consistency warnings: <code>{len(warns)}</code></p>\n"
+        if noise_bits:
+            md += "<p style='margin: 6px 0 2px 0; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>Noise / signal-quality flags:</strong></p>\n"
+            md += "<ul style='margin:2px 0 0 18px; padding:0; color:#1a1a1a!important;'>\n"
+            for b in noise_bits:
+                md += f"<li style='color:#1a1a1a!important;'>{b}</li>\n"
+            md += "</ul>\n"
+        elif s.spectrum is None and p.coherence is None:
+            md += "<p style='margin: 6px 0 0 0; font-size:12px; color:#555!important;'>No spectral/coherence stats on this record (manual entry) — noise indicators unavailable; confidence above is based on regime-boundary distance only.</p>\n"
+        else:
+            md += "<p style='margin: 6px 0 0 0; font-size:12px; color:#555!important;'>No noise flags — signal statistics within normal bounds.</p>\n"
         md += "</div>\n\n"
         return md
 
@@ -429,35 +619,38 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
         }.get(_REGIME_PHRASE[regime], "⚪")
 
         md = "<div style='display: flex; flex-direction: column; gap: 8px;'>\n\n"
-        md += f"<div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px; border-radius: 8px;'>\n"
-        md += f"<p style='margin: 0; font-size: 14px; opacity: 0.9;'>Flow regime</p>\n"
-        md += f"<p style='margin: 4px 0 0 0; font-size: 20px; font-weight: bold;'>{regime_emoji} {_REGIME_PHRASE[regime].title()}</p>\n"
+        md += f"<div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:#fff!important; padding: 14px; border-radius: 8px;'>\n"
+        md += f"<p style='margin: 0; font-size: 14px; opacity: 0.9; color:#fff!important;'>Flow regime{_info(_BOX_INFO['regime'], color='#fff')}</p>\n"
+        md += f"<p style='margin: 4px 0 0 0; font-size: 20px; font-weight: bold; color:#fff!important;'>{regime_emoji} {_REGIME_PHRASE[regime].title()}</p>\n"
         md += "</div>\n\n"
 
-        md += f"<div style='background: #f8f9fa; color: #1a1a1a; padding: 12px; border-radius: 8px;'>\n"
-        md += f"<table style='width: 100%;'>\n"
-        md += f"<tr><td style='padding: 6px; color: #666;'>Lock-in</td><td style='padding: 6px; text-align: right; font-weight: bold;'>{_LOCKIN_PHRASE[lock]}</td></tr>\n"
-        md += f"<tr><td style='padding: 6px; color: #666;'>Amplitude</td><td style='padding: 6px; text-align: right; font-weight: bold;'>{trend.value} ({s.rms_amplitude_over_c:.3f}c)</td></tr>\n"
-        md += f"</table>\n"
+        md += "<div style='background:#f8f9fa!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px;'>\n"
+        md += f"<p style='margin:0 0 4px 0; font-size:11px; color:#888!important;'>Lock-in / Amplitude{_info(_BOX_INFO['summary_lockin_amp'])}</p>\n"
+        md += "<table style='width: 100%;'>\n"
+        md += f"<tr><td style='padding: 6px; color:#666!important;'>Lock-in</td><td style='padding: 6px; text-align: right; font-weight: bold; color:#1a1a1a!important;'>{_LOCKIN_PHRASE[lock]}</td></tr>\n"
+        md += f"<tr><td style='padding: 6px; color:#666!important;'>Amplitude</td><td style='padding: 6px; text-align: right; font-weight: bold; color:#1a1a1a!important;'>{trend.value} ({s.rms_amplitude_over_c:.3f}c)</td></tr>\n"
+        md += "</table>\n"
         md += "</div>\n\n"
 
-        md += f"<div style='background: #fff3cd; color: #1a1a1a; padding: 10px; border-radius: 6px; border-left: 3px solid #ffc107;'>\n"
-        md += f"<p style='margin: 0; font-size: 13px;'><strong>Key insight:</strong> {_MECHANISM[regime]}</p>\n"
+        md += "<div style='background:#fff3cd!important; color:#1a1a1a!important; padding: 10px; border-radius: 6px; border-left: 3px solid #ffc107;'>\n"
+        md += f"<p style='margin: 0; font-size: 13px; color:#1a1a1a!important;'><strong style='color:#1a1a1a!important;'>Key insight{_info(_BOX_INFO['key_insight'])}:</strong> {_MECHANISM[regime]}</p>\n"
         md += "</div>\n\n"
+
+        md += _build_confidence_card(fr)
 
         # Regime probability breakdown (all five regimes, normalized).
         from Data.describe import regime_scores
         scores = regime_scores(fr)
-        md += "<div style='background: #f8f9fa; color: #1a1a1a; padding: 12px; border-radius: 8px;'>\n"
-        md += "<p style='margin: 0 0 6px 0; font-size: 13px; color: #666;'><strong>Regime score breakdown</strong></p>\n"
+        md += "<div style='background:#f8f9fa!important; color:#1a1a1a!important; padding: 12px; border-radius: 8px;'>\n"
+        md += f"<p style='margin: 0 0 6px 0; font-size: 13px; color:#666!important;'><strong style='color:#666!important;'>Regime score breakdown</strong>{_info(_BOX_INFO['score_breakdown'])}</p>\n"
         for r, sc in sorted(scores.items(), key=lambda kv: -kv[1]):
             w = sc * 100
             md += "<div style='display:flex; align-items:center; gap:8px; margin:3px 0;'>\n"
-            md += f"<span style='width:110px; font-size:12px;'>{_REGIME_PHRASE[r]}</span>\n"
+            md += f"<span style='width:110px; font-size:12px; color:#1a1a1a!important;'>{_REGIME_PHRASE[r]}</span>\n"
             md += "<div style='flex:1; background:#eee; border-radius:5px; height:12px;'>\n"
             md += f"<div style='width:{w:.1f}%; height:12px; background:#667eea; border-radius:5px;'></div>\n"
             md += "</div>\n"
-            md += f"<span style='width:44px; font-size:12px; text-align:right;'><code>{sc:.2f}</code></span>\n"
+            md += f"<span style='width:44px; font-size:12px; text-align:right; color:#1a1a1a!important;'><code>{sc:.2f}</code></span>\n"
             md += "</div>\n"
         md += "</div>\n\n"
 
@@ -724,13 +917,13 @@ def create_ui(config: Optional[dict] = None) -> "gr.Blocks":
                 report_btn = gr.DownloadButton("⬇️ Download report (.md)")
             with gr.Row():
                 with gr.Column(scale=1):
-                    summary_out = gr.Markdown("### Quick Summary")
+                    summary_out = gr.Markdown("### Quick Summary", sanitize_html=False)
                 with gr.Column(scale=2):
-                    warnings_out = gr.Markdown("")
+                    warnings_out = gr.Markdown("", sanitize_html=False)
             with gr.Row():
-                metrics_out = gr.Markdown("### Complete Feature Record")
+                metrics_out = gr.Markdown("### Complete Feature Record", sanitize_html=False)
             with gr.Row():
-                interp_out = gr.Markdown(label="Structured interpretation")
+                interp_out = gr.Markdown(label="Structured interpretation", sanitize_html=False)
             interp_passages = gr.Markdown()
 
         # ---- Tab: what-if sweep ---- #
