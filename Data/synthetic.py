@@ -36,6 +36,16 @@ from Data.schema import FlowConditions, FlowRegime, RawExperiment
 # Global default; every public entry point also accepts an explicit seed.
 DEFAULT_SEED = 1234
 
+# Rig runs a constant-flow pump (20 GPM) through a fixed 32mm nozzle onto the
+# specimen -- freestream velocity is therefore a rig constant, not sampled.
+_PUMP_FLOW_GPM = 20.0
+_GALLON_TO_M3 = 3.785411784e-3
+_NOZZLE_DIAMETER_M = 0.032
+_NOZZLE_AREA_M2 = math.pi * (_NOZZLE_DIAMETER_M / 2.0) ** 2
+FIXED_FREESTREAM_VELOCITY_M_S = (
+    _PUMP_FLOW_GPM * _GALLON_TO_M3 / 60.0
+) / _NOZZLE_AREA_M2
+
 # How long / how finely we sample the synthetic signals.
 _DURATION_S = 8.0
 _FS_HZ = 400.0  # sampling rate of time signals
@@ -48,7 +58,6 @@ class _RegimePlan:
     """Internal blueprint of the per-regime sampling distributions."""
 
     regime: FlowRegime
-    re_log10_range: tuple
     aoa_range: tuple
     st_range: tuple
     # structural natural freq expressed as a multiple of the shedding freq
@@ -68,7 +77,6 @@ class _RegimePlan:
 _PLANS: Dict[FlowRegime, _RegimePlan] = {
     FlowRegime.ATTACHED: _RegimePlan(
         regime=FlowRegime.ATTACHED,
-        re_log10_range=(4.0, 5.5),
         aoa_range=(-4.0, 6.0),
         st_range=(0.16, 0.20),
         fn_over_fshed_range=(2.5, 6.0),  # structure far stiffer than shedding
@@ -83,7 +91,6 @@ _PLANS: Dict[FlowRegime, _RegimePlan] = {
     ),
     FlowRegime.SEPARATED: _RegimePlan(
         regime=FlowRegime.SEPARATED,
-        re_log10_range=(4.0, 6.0),
         aoa_range=(10.0, 18.0),
         st_range=(0.15, 0.22),
         fn_over_fshed_range=(1.8, 4.0),
@@ -98,7 +105,6 @@ _PLANS: Dict[FlowRegime, _RegimePlan] = {
     ),
     FlowRegime.VIV_LOCKIN: _RegimePlan(
         regime=FlowRegime.VIV_LOCKIN,
-        re_log10_range=(3.5, 5.5),
         aoa_range=(0.0, 8.0),
         st_range=(0.17, 0.22),
         fn_over_fshed_range=(0.95, 1.05),  # synchronized
@@ -113,7 +119,6 @@ _PLANS: Dict[FlowRegime, _RegimePlan] = {
     ),
     FlowRegime.GALLOPING: _RegimePlan(
         regime=FlowRegime.GALLOPING,
-        re_log10_range=(4.0, 6.0),
         aoa_range=(4.0, 14.0),
         st_range=(0.12, 0.18),
         fn_over_fshed_range=(0.1, 0.35),  # f_n << f_shed
@@ -128,7 +133,6 @@ _PLANS: Dict[FlowRegime, _RegimePlan] = {
     ),
     FlowRegime.STALL_FLUTTER: _RegimePlan(
         regime=FlowRegime.STALL_FLUTTER,
-        re_log10_range=(4.0, 6.0),
         aoa_range=(12.0, 22.0),  # near/above static stall
         st_range=(0.14, 0.20),
         fn_over_fshed_range=(0.5, 0.9),  # SDOF torsional below shedding
@@ -211,13 +215,12 @@ def generate_experiment(
     """Generate a single physically-plausible ``RawExperiment`` for ``regime``."""
     plan = _PLANS[regime]
 
-    re = 10.0 ** _u(rng, *plan.re_log10_range)
     aoa = _u(rng, *plan.aoa_range)
     chord = _u(rng, 0.05, 0.4)
-    # Velocity from Reynolds (water-ish nu) but clamped to the schema's range.
+    # Rig-fixed velocity (constant-flow pump): Re is now derived, not sampled.
     nu = 1.0e-6
-    u_inf = re * nu / chord
-    u_inf = float(np.clip(u_inf, 0.2, 40.0))
+    u_inf = FIXED_FREESTREAM_VELOCITY_M_S
+    re = u_inf * chord / nu
 
     st = _u(rng, *plan.st_range)
     f_shed = st * u_inf / chord
