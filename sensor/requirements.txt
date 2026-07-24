@@ -1,0 +1,11 @@
+# sensor/ CFD-surrogate pipeline deps (installed into base conda env)
+# OpenFOAM (ESI v2606) + gmsh CLI are external: `brew install --cask openfoam`
+# (gerlero tap) and `brew install gmsh`. Run OpenFOAM via `openfoam2606 -c '...'`.
+numpy>=1.26
+scipy>=1.11
+matplotlib>=3.8
+gmsh>=4.13          # python API (separate from the brew CLI binary)
+pyvista>=0.44       # read OpenFOAM solution, interpolate to grid
+meshio>=5.3
+# UNet training (added when sensor/model.py lands):
+# torch>=2.2
