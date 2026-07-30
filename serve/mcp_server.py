@@ -11,6 +11,11 @@ Tools
 * ``search_literature``             -- FAISS retrieval over the FSI paper corpus
 * ``validate_interpretation``       -- parse + physics-check generated text (no model)
 * ``generate_synthetic_experiment`` -- demo FeatureRecord for a chosen flow regime
+* ``predict_flow``                  -- U-Net surrogate: geometry + alpha -> Cl/Cd/Cm, fields
+* ``predict_polar``                 -- Cl/Cd polar and stall angle for a section
+* ``digital_twin_record``           -- geometry -> full FeatureRecord + data-quality report
+* ``check_data_quality``            -- instrumentation-fault screening on raw channels
+* ``surrogate_status``              -- dataset/checkpoint state
 
 Resources
 ---------
@@ -71,6 +76,15 @@ def _load_config() -> dict:
     return _state["config"]
 
 
+def _abs(p: str) -> str:
+    """Resolve a path against the project root.
+
+    MCP clients launch the server from arbitrary working directories, so every
+    path an agent passes in has to be anchored here rather than to ``os.getcwd``.
+    """
+    return p if os.path.isabs(p) else str(_ROOT / p)
+
+
 def _get_runner():
     """Build the shared InferenceRunner (heavy model load deferred inside it)."""
     if _state["runner"] is None:
@@ -79,9 +93,6 @@ def _get_runner():
         config = _load_config()
         cfg = config.get("inference", {})
         rag_cfg = config.get("rag", {})
-
-        def _abs(p: str) -> str:
-            return p if os.path.isabs(p) else str(_ROOT / p)
 
         _state["runner"] = InferenceRunner(InferenceConfig(
             model_name=_abs(cfg.get("model_name", "./artifacts/models/Phi-4-mini-instruct")),
@@ -316,6 +327,115 @@ def generate_synthetic_experiment(regime: str = "viv_lockin", seed: int = 0) -> 
     raw = generate_experiment(flow_regime, rng=np.random.default_rng(seed))
     fr = extract_features(raw)
     return json.loads(fr.model_dump_json())
+
+
+@mcp.tool()
+def predict_flow(
+    airfoil: str,
+    alpha_deg: float,
+    reynolds: float = 5.0e5,
+    return_fields: bool = False,
+) -> Dict[str, Any]:
+    """Predict lift, drag, moment and deflection for an airfoil, instantly.
+
+    Runs the trained U-Net surrogate on the given section and incidence -- no
+    mesh, no solver, milliseconds. Returns Cl, Cd, Cm, peak deflection and
+    trailing-edge twist; set return_fields for the velocity, pressure, load and
+    displacement maps (downsampled 4x). Falls back to the panel solver if no
+    checkpoint is trained yet, and says which it used in "source".
+
+    airfoil is a path to a .dat file, e.g. Data/Airfoils/4/n0009sm.dat.txt.
+    """
+    from sensor.api import predict_case
+
+    return predict_case(
+        _abs(airfoil), alpha_deg, reynolds, return_fields=return_fields
+    )
+
+
+@mcp.tool()
+def predict_polar(
+    airfoil: str,
+    alpha_min: float = -4.0,
+    alpha_max: float = 16.0,
+    n_points: int = 11,
+    reynolds: float = 5.0e5,
+) -> Dict[str, Any]:
+    """Lift/drag polar for a section: Cl(alpha), Cd(alpha), Cl_max and its angle.
+
+    Use this to compare candidate sections or to find the stall angle before
+    committing to a test condition.
+    """
+    import numpy as np
+
+    from sensor.api import sweep_alpha
+
+    alphas = np.linspace(alpha_min, alpha_max, max(2, int(n_points))).tolist()
+    return sweep_alpha(_abs(airfoil), alphas, reynolds)
+
+
+@mcp.tool()
+def digital_twin_record(
+    airfoil: str,
+    alpha_deg: float,
+    chord_m: float = 0.1,
+    span_m: float = 0.3,
+    u_inf_m_s: float = 5.0,
+    inject_faults: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Build a full FSI experiment record from geometry alone.
+
+    Runs the surrogate, derives wake width, separation point, shedding
+    frequency and structural response, and returns a FeatureRecord ready for
+    interpret_experiment -- plus a data-quality report screening every channel
+    for instrumentation faults (PIV dropout, clipping, mains pickup, drift,
+    spikes, aliasing).
+
+    inject_faults deliberately corrupts the synthesised signals to test the
+    detector: any of clipping, dropout, mains, drift, spike, flatline.
+
+    The time series are a 1-DOF instrument model driven by steady surrogate
+    output, not measurements; the returned "provenance" block says so.
+    """
+    from sensor.api import twin_record
+
+    return twin_record(
+        _abs(airfoil), alpha_deg, chord_m=chord_m, span_m=span_m,
+        u_inf_m_s=u_inf_m_s, inject_faults=tuple(inject_faults or ()),
+    )
+
+
+@mcp.tool()
+def check_data_quality(feature_record: Dict[str, Any] = None,
+                       signals: Dict[str, List[float]] = None,
+                       sampling_rate_hz: float = 400.0) -> Dict[str, Any]:
+    """Screen raw experiment channels for instrumentation faults.
+
+    Pass ``signals`` as a mapping of channel name to samples (displacement,
+    wake probe, cl, cd, cm). Reports PIV dropout and spurious vectors, ADC
+    clipping and quantisation, spikes, drift, flatlines, poor spectral
+    signal-to-noise, aliasing and 50/60 Hz mains pickup, each with a severity
+    and a plain-language explanation of what it invalidates.
+
+    This is instrumentation screening, not physics checking -- use
+    check_experiment_consistency for the latter.
+    """
+    from features.noise import analyse_signals
+
+    if not signals:
+        raise ValueError("provide `signals`: {channel_name: [samples, ...]}")
+    report = analyse_signals(signals, sampling_rate_hz)
+    out = report.to_dict()
+    out["prompt_block"] = report.to_prompt_block()
+    return out
+
+
+@mcp.tool()
+def surrogate_status() -> Dict[str, Any]:
+    """Is the 1,926-case dataset generated and the U-Net trained? Which epoch?"""
+    from sensor.api import checkpoint_info, dataset_summary
+
+    return {"dataset": dataset_summary(), "surrogate": checkpoint_info()}
 
 
 # --------------------------------------------------------------------------- #

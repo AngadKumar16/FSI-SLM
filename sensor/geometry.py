@@ -100,6 +100,42 @@ def load_dat(path: str | Path) -> Airfoil:
     return Airfoil(name=name, xy=xy)
 
 
+def close_trailing_edge(af: Airfoil, power: float = 1.0) -> Airfoil:
+    """Collapse a finite trailing-edge gap onto a single point.
+
+    Most tabulated sections (NACA 0012, the whole 6-series set) are published
+    with a blunt trailing edge -- upper and lower surfaces end a percent or two
+    apart. That base segment is fatal to a panel method: the Kutta condition is
+    imposed on the first and last panels, and with a blunt TE those panels lie
+    on the *base*, not on the upper and lower surfaces, so the circulation comes
+    out wrong (a symmetric foil then reports a nonzero zero-lift angle).
+
+    The gap is removed the way XFOIL does it: distribute the closure linearly in
+    chord so the aft geometry deforms smoothly and the leading edge is
+    untouched. ``power > 1`` concentrates the deformation nearer the TE.
+
+    No-op when the section is already closed.
+    """
+    xy = af.xy.copy()
+    upper_te = xy[0]
+    lower_te = xy[-2]
+    gap = upper_te - lower_te
+    if float(np.hypot(*gap)) < 1e-9:
+        return af
+
+    x = xy[:, 0]
+    x_le, x_te = float(x.min()), float(x.max())
+    span = max(x_te - x_le, 1e-9)
+    w = np.clip((x - x_le) / span, 0.0, 1.0) ** power
+
+    i_le = int(np.argmin(x))
+    sign = np.ones(xy.shape[0])
+    sign[i_le:] = -1.0  # lower surface moves the other way
+    xy = xy - 0.5 * sign[:, None] * w[:, None] * gap[None, :]
+    xy[-1] = xy[0]
+    return Airfoil(name=af.name, xy=xy)
+
+
 def rotate(af: Airfoil, alpha_deg: float, pivot: Tuple[float, float] = (0.25, 0.0)) -> Airfoil:
     """Rotate foil by +alpha (nose-up) about ``pivot`` (default quarter-chord).
 

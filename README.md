@@ -6,6 +6,24 @@ Fine-tune **Phi-4-mini-instruct** (3.8B) to interpret fluid-structure interactio
 
 The system generates synthetic training data with physically-consistent couplings (Strouhal number, lock-in, galloping, stall flutter), extracts features via signal processing (FFT, POD), builds an SFT dataset, trains with MLX-based LoRA, and optionally augments inference with RAG over a corpus of FSI papers indexed with FAISS.
 
+There are two halves. The **interpreter** reads an experiment record and explains
+it. The **surrogate** (`sensor/`) produces that record from geometry alone: a
+U-Net trained on 1,926 solved cases predicts velocity, pressure, load and
+displacement fields plus the force coefficients, and a bridge turns those steady
+fields into a time-resolved `FeatureRecord` screened for instrumentation faults.
+Together they close the loop from "NACA 0009 at 12 degrees" to an interpreted
+experiment with no human step.
+
+```bash
+python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12 --interpret
+```
+
+- **[docs/surrogate.md](docs/surrogate.md)** — what the surrogate computes, how it
+  is validated, and what it is not
+- **[docs/abstract_claims.md](docs/abstract_claims.md)** — every claim in the
+  paper abstract mapped to the code that implements it, including the two that
+  are not yet true
+
 ---
 
 ## Architecture
@@ -61,6 +79,12 @@ For a detailed end-to-end workflow diagram see:
 | **Serve** | FastAPI inference server with RAG | `serve/fastapi_app.py` |
 | **MCP Server** | Model Context Protocol server (tools for Claude Desktop/Code and other MCP clients) | `serve/mcp_server.py` |
 | **Config** | YAML-based configuration with sensible defaults | `configs/default.yaml` |
+| **Noise Detection** | Eleven instrumentation-fault detectors (PIV dropout and spurious vectors, ADC clipping and quantisation, spikes, drift, flatline, spectral SNR, aliasing, mains pickup) | `features/noise.py` |
+| **Flow Solver** | Hess-Smith panel method + Beddoes-Leishman static stall + momentum-consistent wake | `sensor/flow/` |
+| **Structural Solver** | Chordwise Euler-Bernoulli beam (load and displacement fields) + spanwise modal model | `sensor/structure/` |
+| **Dataset Generator** | 107 sections x 18 angles = 1,926 cases, foil-disjoint splits | `sensor/generate.py` |
+| **U-Net Surrogate** | Five field channels + five scalars from geometry and flow condition | `sensor/model.py`, `sensor/train.py` |
+| **Twin Bridge** | Steady surrogate fields -> time-resolved `FeatureRecord` + data-quality report | `sensor/bridge.py` |
 
 ---
 
@@ -240,8 +264,44 @@ python cli.py <command> [options]
 | `ui` | Launch the Gradio web UI |
 | `mcp` | Start the MCP server (stdio) for Claude Desktop/Code |
 | `demo` | Instant end-to-end terminal demo (no model): generate → extract → interpret → validate all 5 regimes; `--sweep` adds a U* regime map |
+| `sensor-generate` | Solve the 107 × 18 = 1,926-case surrogate training set |
+| `sensor-cache` | Flatten the generated `.npz` files into training memmaps |
+| `sensor-train` | Train the U-Net (fields + force coefficients) |
+| `sensor-eval` | Score the surrogate on held-out sections |
+| `sensor-predict` | Coefficients (and fields) for one section and incidence |
+| `twin` | Geometry → fields → `FeatureRecord` → data-quality report → interpretation |
 
 Each command accepts `--config-path` to specify a custom YAML configuration file (default: `configs/default.yaml`).
+
+### The surrogate pipeline
+
+```bash
+python cli.py sensor-generate                  # 1,926 cases, ~2 min on 4 cores
+python cli.py sensor-cache                     # memmap cache, ~20 s
+python cli.py sensor-train --epochs 60 --batch-size 16          # 128x128
+python cli.py sensor-train --downsample 2 --base 16 --epochs 60 # fast 64x64
+python cli.py sensor-eval --split test
+python cli.py sensor-predict --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12
+python -m sensor.figures --out poster/generated
+```
+
+Held-out results (306 cases across 17 unseen sections, NACA 0009 among them):
+`Cl` R² = 0.996, `Cd` R² = 0.996, `Cm` R² = 0.986, peak deflection R² = 0.90;
+relative field RMSE 0.025 (`u`), 0.16 (`v`), 0.17 (`p`), 0.04 (`load`).
+
+### The full twin
+
+```bash
+# solver-driven, no network needed
+python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 14 --use-surrogate False
+
+# surrogate-driven, interpreted by the language model with RAG
+python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 14 --interpret --use-rag
+
+# exercise the instrumentation-fault detector end to end
+python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 14 \
+    --inject-faults "mains,dropout,clipping"
+```
 
 ---
 
@@ -438,7 +498,27 @@ FSI-SLM/
 │   ├── build_dataset.py    # SFT dataset builder
 │   └── Papers/             # PDF corpus for RAG
 ├── features/
-│   └── extract.py          # Feature extraction (FFT, POD, St)
+│   ├── extract.py          # Feature extraction (FFT, POD, St)
+│   └── noise.py            # Instrumentation-fault detection (PIV, ADC, mains)
+├── sensor/                  # Surrogate: geometry -> fields, loads, coefficients
+│   ├── geometry.py         # .dat parsing, TE closure, rotation
+│   ├── sdf.py              # Signed distance field + U-Net input tensor
+│   ├── flow/
+│   │   ├── panel.py        # Hess-Smith panel method
+│   │   ├── viscous.py      # Beddoes-Leishman stall + drag
+│   │   └── solve.py        # Fields: near-wall layer, bubble, wake, pressure
+│   ├── structure/
+│   │   └── beam.py         # Chordwise Hermite beam + spanwise modal model
+│   ├── cfd/                # OpenFOAM backend (same tensor contract)
+│   ├── simulate.py         # One case, end to end
+│   ├── generate.py         # 107 x 18 batch driver, manifest, splits
+│   ├── data.py             # Memmap cache, normalisation
+│   ├── model.py            # U-Net (field decoder + scalar head)
+│   ├── train.py            # Resumable, device-agnostic training
+│   ├── predict.py          # Inference + held-out scoring
+│   ├── bridge.py           # Steady fields -> time-resolved FeatureRecord
+│   ├── api.py              # Shared entry point for CLI / REST / MCP
+│   └── figures.py          # Figures generated from artefacts on disk
 ├── train/
 │   ├── sft.py              # MLX-based LoRA training
 │   └── tokenization/
@@ -455,16 +535,23 @@ FSI-SLM/
 │   └── fastapi_app.py      # FastAPI inference server
 ├── tools/utils/
 │   └── repro.py            # Seed-setting utilities
-├── tests/                  # Unit tests
+├── tests/                  # 220 tests
 │   ├── test_schema.py
 │   ├── test_synthetic.py
 │   ├── test_features.py
 │   ├── test_describe.py
-│   └── test_validate_output.py
+│   ├── test_validate_output.py
+│   ├── test_panel.py       # thin-airfoil theory, d'Alembert, stagnation
+│   ├── test_viscous.py     # polars vs Abbott & von Doenhoff
+│   ├── test_structure.py   # beam vs closed-form, cantilever frequency
+│   ├── test_noise.py       # detectors fire, and stay quiet
+│   └── test_surrogate.py   # tensors, dataset, model, twin bridge
 ├── configs/
 │   └── default.yaml        # Default configuration
 ├── docs/
-│   └── schema.md           # Schema documentation
+│   ├── schema.md           # Schema documentation
+│   ├── surrogate.md        # Surrogate physics, validation and limits
+│   └── abstract_claims.md  # Abstract claims mapped to implementation
 ├── cli.py                  # Unified CLI entry point
 ├── requirements.txt        # Pinned dependencies
 └── README.md               # This file
