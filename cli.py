@@ -655,6 +655,188 @@ def mcp(config_path: str = "configs/default.yaml") -> None:
     mcp_main()
 
 
+def sensor_generate(
+    out_dir: str = "artifacts/cfd",
+    airfoil_root: str = "Data/Airfoils",
+    reynolds: float = 5.0e5,
+    max_workers: int = 4,
+    overwrite: bool = False,
+    foil_start: int = 0,
+    foil_count: Optional[int] = None,
+    time_budget_s: Optional[float] = None,
+) -> None:
+    """Generate the U-Net training set: 107 sections x 18 angles = 1,926 cases.
+
+    Runs the panel + viscous solver and the chordwise beam for every case,
+    writing one .npz per case plus a manifest and foil-disjoint splits. Safe to
+    interrupt and re-run: completed cases are skipped.
+    """
+    from sensor.generate import GenConfig, generate_dataset
+
+    cfg = GenConfig(
+        airfoil_root=_resolve_path(airfoil_root), out_dir=_resolve_path(out_dir),
+        reynolds=reynolds, max_workers=max_workers, overwrite=overwrite,
+    )
+    summary = generate_dataset(
+        cfg, foil_start=foil_start, foil_count=foil_count,
+        time_budget_s=time_budget_s,
+    )
+    print(json.dumps(summary, indent=2))
+
+
+def sensor_cache(
+    manifest: str = "artifacts/cfd/manifest.jsonl",
+    splits: str = "artifacts/cfd/splits.json",
+    out_dir: str = "artifacts/sensor/cache",
+    time_budget_s: Optional[float] = None,
+) -> None:
+    """Flatten the generated .npz files into memmaps for fast training."""
+    from sensor.data import build_cache
+
+    print(json.dumps(build_cache(
+        _resolve_path(manifest), _resolve_path(splits), _resolve_path(out_dir),
+        time_budget_s=time_budget_s,
+    ), indent=2))
+
+
+def sensor_train(
+    cache_dir: str = "artifacts/sensor/cache",
+    run_dir: str = "artifacts/sensor/run",
+    epochs: int = 60,
+    batch_size: int = 16,
+    lr: float = 2e-3,
+    base: int = 24,
+    depth: int = 4,
+    downsample: int = 1,
+    device: str = "auto",
+    time_budget_s: Optional[float] = None,
+    resume: bool = True,
+) -> None:
+    """Train the U-Net surrogate (fields + force coefficients)."""
+    from sensor.train import train as _train
+
+    print(json.dumps(_train(
+        cache_dir=_resolve_path(cache_dir), run_dir=_resolve_path(run_dir),
+        epochs=epochs, batch_size=batch_size, lr=lr, base=base, depth=depth,
+        downsample=downsample, device=device, time_budget_s=time_budget_s,
+        resume=resume,
+    ), indent=2))
+
+
+def sensor_eval(
+    checkpoint: str = "artifacts/sensor/run/best.pt",
+    cache_dir: str = "artifacts/sensor/cache",
+    split: str = "test",
+    device: str = "auto",
+    out_path: str = "artifacts/sensor/eval_test.json",
+) -> None:
+    """Score the surrogate on a held-out split (NACA 0009 is in the test set)."""
+    from sensor.predict import evaluate_split
+
+    print(json.dumps(evaluate_split(
+        _resolve_path(checkpoint), _resolve_path(cache_dir), split, device,
+        out_path=_resolve_path(out_path),
+    ), indent=2))
+
+
+def sensor_predict(
+    airfoil: str,
+    alpha: float,
+    reynolds: float = 5.0e5,
+    checkpoint: str = "artifacts/sensor/run/best.pt",
+    device: str = "auto",
+    fields: bool = False,
+) -> None:
+    """Predict coefficients (and optionally fields) for one case."""
+    from sensor.api import predict_case
+
+    out = predict_case(
+        _resolve_path(airfoil), alpha, reynolds, _resolve_path(checkpoint),
+        device, return_fields=fields,
+    )
+    if not fields:
+        print(json.dumps(out, indent=2))
+    else:
+        shape = (len(out["fields"]["u"]), len(out["fields"]["u"][0]))
+        meta = {k: v for k, v in out.items() if k != "fields"}
+        meta["fields_shape"] = list(shape)
+        print(json.dumps(meta, indent=2))
+
+
+def twin(
+    airfoil: str,
+    alpha: float,
+    chord_m: float = 0.1,
+    span_m: float = 0.3,
+    u_inf: float = 5.0,
+    use_surrogate: bool = True,
+    checkpoint: str = "artifacts/sensor/run/best.pt",
+    inject_faults: str = "",
+    interpret: bool = False,
+    use_rag: bool = False,
+    config_path: str = "configs/default.yaml",
+) -> None:
+    """Full digital twin: geometry + incidence -> FeatureRecord -> interpretation.
+
+    Runs the surrogate (or the solver), derives the FSI feature record, screens
+    every channel for instrumentation faults, and -- with ``--interpret`` -- hands
+    the record plus the data-quality block to the language model.
+
+    ``--inject-faults`` takes a comma-separated list from clipping, dropout,
+    mains, drift, spike, flatline to exercise the noise detector end to end.
+    """
+    from sensor.api import twin_record
+
+    # fire splits a comma-separated flag into a tuple before we see it, so
+    # accept either form.
+    if isinstance(inject_faults, str):
+        inject_faults = inject_faults.split(",")
+    faults = tuple(str(f).strip() for f in inject_faults if str(f).strip())
+    out = twin_record(
+        _resolve_path(airfoil), alpha, chord_m=chord_m, span_m=span_m,
+        u_inf_m_s=u_inf, use_surrogate=use_surrogate,
+        checkpoint=_resolve_path(checkpoint), inject_faults=faults,
+    )
+    fr = out["feature_record"]
+    print(f"[twin] {airfoil} at {alpha:g} deg  (source: {out['provenance']['source']})")
+    print(f"  regime (rule-based): {out['regime_rule_based']}")
+    print(f"  Cl={fr['forces']['cl_mean']:+.3f}  Cd={fr['forces']['cd_mean']:.4f}  "
+          f"St={fr['piv']['strouhal_number']:.3f}  "
+          f"f_shed={fr['piv']['shedding_frequency_hz']:.1f} Hz  "
+          f"f_n={fr['structure']['natural_frequency_hz']:.1f} Hz")
+    print(f"  data quality: {out['noise_report']['verdict']} "
+          f"(score {out['noise_report']['quality_score']:.2f})")
+    for flag in out["noise_report"]["flags"]:
+        print(f"    - {flag['severity'].upper()} {flag['channel']}/{flag['name']}: "
+              f"{flag['message']}")
+
+    if not interpret:
+        return
+
+    from Data.schema import FeatureRecord
+    from features.noise import NoiseReport, NoiseFlag
+    from inference.runner import InferenceRunner
+
+    ctx = CLIContext.from_config_path(_resolve_path(config_path))
+    record = FeatureRecord.model_validate(fr)
+    report = NoiseReport(
+        flags=[NoiseFlag(**f) for f in out["noise_report"]["flags"]],
+        channels_checked=out["noise_report"]["channels_checked"],
+        quality_score=out["noise_report"]["quality_score"],
+        verdict=out["noise_report"]["verdict"],
+        summary=out["noise_report"]["summary"],
+    )
+    runner = InferenceRunner(_build_inference_config(ctx))
+    try:
+        retrieved = runner.retrieve(record) if use_rag else None
+        prompt = runner.build_prompt(record, retrieved, noise_report=report)
+        text = runner.generate(prompt)
+        print("\n[twin] model interpretation:\n")
+        print(text)
+    finally:
+        runner.close()
+
+
 def demo(seed: int = 0, sweep: bool = False) -> None:
     """End-to-end terminal demo: no model, no downloads, runs in seconds.
 
@@ -730,6 +912,13 @@ def main() -> None:
         "ui": ui,
         "mcp": mcp,
         "demo": demo,
+        # --- surrogate ("sensor") pipeline ---
+        "sensor-generate": sensor_generate,
+        "sensor-cache": sensor_cache,
+        "sensor-train": sensor_train,
+        "sensor-eval": sensor_eval,
+        "sensor-predict": sensor_predict,
+        "twin": twin,
     })
 
 
@@ -749,5 +938,11 @@ __all__ = [
     "ui",
     "mcp",
     "demo",
+    "sensor_generate",
+    "sensor_cache",
+    "sensor_train",
+    "sensor_eval",
+    "sensor_predict",
+    "twin",
     "main",
 ]

@@ -31,8 +31,16 @@ Figures (in this folder):
   simpleFoam (k-ω SST) → Cl/Cd → grid-sampled training pair`.
 - Validated on NACA 0009 at α = 8°, Re = 5×10⁵: **Cl ≈ 0.73**, with the correct
   flow structure — leading-edge suction, stagnation, circulation, and wake.
-- Next: generate ~1900 cases (107 foils × 18 AoA), train the U-Net, and check
-  the predicted Cl–α curve against XFOIL through stall (~17°).
+- **Done:** all 1,926 cases (107 foils × 18 AoA) generated with the fast
+  panel + Beddoes-Leishman backend, and the U-Net trained on them.
+  Held out 17 unseen sections (NACA 0009 among them): Cl R² = 0.996,
+  Cd R² = 0.996, peak deflection R² = 0.90, and 2.5% relative RMSE on the
+  streamwise velocity field.
+- Next: regenerate a RANS subset with the OpenFOAM backend — it writes the same
+  tensor contract — and fine-tune the panel-pretrained network on it.
+
+→ Figures: `generated/fig_sensor_fields.png`, `generated/fig_sensor_separation.png`,
+`generated/fig_sensor_accuracy.png`, `generated/fig_sensor_field_compare.png`
 
 → Figure: `poster_fig1_flowfields.png`
 

@@ -27,6 +27,15 @@ gradio>=4.0.0
 # CLI
 fire>=0.5.0
 
+# Surrogate ("sensor") pipeline: panel solver, beam model, U-Net, figures.
+# Nothing here is needed to run the interpreter alone.
+matplotlib>=3.8.0
+# Optional, for the high-fidelity OpenFOAM backend only (external binaries:
+# `brew install --cask openfoam` via the gerlero tap, plus `brew install gmsh`):
+# gmsh>=4.13
+# pyvista>=0.44
+# meshio>=5.3
+
 # Testing
 pytest>=7.4.0
 # MCP server

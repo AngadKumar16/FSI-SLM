@@ -153,13 +153,21 @@ class InferenceRunner:
         self,
         feature_record: FeatureRecord,
         retrieved: Optional[list] = None,
+        noise_report=None,
     ) -> str:
-        """Render the chat-template prompt, optionally with RAG passages."""
+        """Render the chat-template prompt, optionally with RAG passages.
+
+        ``noise_report`` is a :class:`features.noise.NoiseReport`; when supplied
+        its flags are inserted as a ``[data_quality]`` block so the model can
+        separate instrumentation faults from flow physics.
+        """
         self._ensure_model()
-        if retrieved is not None:
+        if retrieved is not None or noise_report is not None:
             from rag.prompt_assembly import assemble_rag_prompt
 
-            return assemble_rag_prompt(feature_record, retrieved)
+            return assemble_rag_prompt(
+                feature_record, retrieved or [], noise_report=noise_report
+            )
         return render_chat(
             SYSTEM_PROMPT,
             feature_record.to_prompt_block(),
