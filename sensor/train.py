@@ -154,11 +154,7 @@ def train(
     history = []
     best = math.inf
     if resume and ckpt_path.exists():
-        ck = torch.load(
-            ckpt_path,
-            map_location=dev,
-            weights_only=False,
-        )
+        ck = torch.load(ckpt_path, map_location=dev)
         if ck.get("config") == cfg.to_dict() and ck.get("downsample") == downsample:
             model.load_state_dict(ck["model"])
             opt.load_state_dict(ck["optimizer"])
