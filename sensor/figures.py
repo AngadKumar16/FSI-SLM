@@ -270,6 +270,129 @@ def fig_training_curve(out: Path, history: str = "artifacts/sensor/run/history.j
     plt.close(fig)
 
 
+def fig_rans_validation(out: Path, manifest: str = "artifacts/cfd/manifest.jsonl"):
+    """RANS vs panel polars on NACA 0009, with convergence marked.
+
+    The point of the figure is the *split*: the converged branch is a genuine
+    validation, the rest is a steady solver limit-cycling on separated flow.
+    Drawing them the same way would be dishonest, so non-converged points are
+    hollow and carry their oscillation amplitude as an error bar.
+    """
+    path = Path(manifest)
+    if not path.exists():
+        return
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    rans = sorted((r for r in rows if r.get("fidelity") == "rans"),
+                  key=lambda r: r["alpha_deg"])
+    if not rans:
+        return
+    foil = rans[0]["foil"]
+    # Compute the panel polar directly rather than reading it from the
+    # manifest: the merge replaces panel rows wherever a RANS case exists at
+    # the same angle, so the manifest only retains the non-overlapping angles
+    # and the comparison curve would come out full of holes.
+    panel = []
+    dat = rans[0].get("dat")
+    if dat and Path(dat).exists():
+        prep = CasePrep.build(load_dat(dat))
+        grid = Grid(nx=64, ny=64)
+        for a in np.arange(-8.0, 20.5, 1.0):
+            c = simulate_case(prep, float(a), 5.0e5, grid, with_modal=False)["coeffs"]
+            panel.append({"alpha_deg": float(a), "cl": c["cl"], "cd": c["cd"]})
+
+    ok = [r for r in rans if r.get("converged")]
+    bad = [r for r in rans if not r.get("converged")]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+    for ax, key, label in ((axes[0], "cl", "$C_l$"), (axes[1], "cd", "$C_d$")):
+        if panel:
+            ax.plot([r["alpha_deg"] for r in panel], [r[key] for r in panel],
+                    "-", color="#4C72B0", lw=1.5, label="panel (training target)")
+        err = [r.get(f"{key}_std") or 0.0 for r in bad]
+        ax.errorbar([r["alpha_deg"] for r in bad], [r[key] for r in bad], yerr=err,
+                    fmt="o", mfc="none", color="#C44E52", ms=6, capsize=3,
+                    label="RANS, not converged")
+        ax.plot([r["alpha_deg"] for r in ok], [r[key] for r in ok],
+                "s", color="#C44E52", ms=6, label="RANS, converged")
+        ax.set_xlabel("angle of attack [deg]")
+        ax.set_ylabel(label)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=7)
+    axes[1].set_yscale("log")
+
+    # published anchors for NACA 0009 at Re = 5e5
+    axes[1].plot([0], [0.007], "k*", ms=12, label="published")
+    axes[1].legend(fontsize=7)
+
+    ax = axes[2]
+    ax.semilogy([r["alpha_deg"] for r in rans],
+                [r.get("residual_max") or 1e-8 for r in rans], "o-", color="#55A868")
+    ax.axhline(1e-4, color="k", ls="--", lw=1)
+    ax.text(-7, 1.4e-4, "convergence tolerance", fontsize=7)
+    ax.set_xlabel("angle of attack [deg]")
+    ax.set_ylabel("max initial residual")
+    ax.set_title(f"{len(ok)} of {len(rans)} cases converged", fontsize=9)
+    ax.grid(alpha=0.3, which="both")
+
+    fig.suptitle(
+        f"Steady RANS (k-omega SST) on {foil}, Re = 5e5 -- held out of training. "
+        f"Post-stall cases limit-cycle and are excluded.", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out / "fig_rans_validation.png", dpi=160)
+    plt.close(fig)
+
+
+def fig_fidelity_transfer(
+    out: Path,
+    panel_json: str = "artifacts/sensor/eval_test_panel.json",
+    rans_json: str = "artifacts/sensor/eval_test_rans.json",
+):
+    """How the panel-trained surrogate holds up when the truth changes solver."""
+    pp, rp = Path(panel_json), Path(rans_json)
+    if not (pp.exists() and rp.exists()):
+        return
+    panel = json.loads(pp.read_text())
+    rans = json.loads(rp.read_text())
+
+    fields = ["u", "v", "p", "load", "disp"]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    x = np.arange(len(fields))
+    ax1.bar(x - 0.2, [panel["fields"][f]["relative_rmse"] for f in fields], 0.4,
+            label=f"vs panel (n={panel['n_cases']})", color="#4C72B0")
+    ax1.bar(x + 0.2, [rans["fields"][f]["relative_rmse"] for f in fields], 0.4,
+            label=f"vs RANS (n={rans['n_cases']})", color="#C44E52")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(fields)
+    ax1.set_ylabel("relative RMSE")
+    ax1.set_title("field channels", fontsize=9)
+    ax1.legend(fontsize=8)
+    ax1.grid(alpha=0.3, axis="y")
+
+    # MAE only: R^2 is meaningless for the near-zero-variance scalars at n = 7
+    scal = ["cl", "cd", "cm", "w_max", "twist_te_deg"]
+    x = np.arange(len(scal))
+    pv = [panel["scalars"][s]["mae"] for s in scal]
+    rv = [rans["scalars"][s]["mae"] for s in scal]
+    ax2.bar(x - 0.2, pv, 0.4, label="vs panel", color="#4C72B0")
+    ax2.bar(x + 0.2, rv, 0.4, label="vs RANS", color="#C44E52")
+    ax2.set_yscale("log")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(scal, rotation=15)
+    ax2.set_ylabel("mean absolute error")
+    ax2.set_title("integrated quantities (MAE; $R^2$ omitted, n=7)", fontsize=9)
+    ax2.legend(fontsize=8)
+    ax2.grid(alpha=0.3, axis="y", which="both")
+
+    fig.suptitle(
+        "Cross-fidelity transfer: one network, trained on panel targets only, "
+        "scored against each solver on the held-out section", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out / "fig_fidelity_transfer.png", dpi=160)
+    plt.close(fig)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="poster/generated")
@@ -278,7 +401,8 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     for fn in (fig_fields, fig_separation_series, fig_polar, fig_dataset,
-               fig_surrogate_accuracy, fig_training_curve):
+               fig_surrogate_accuracy, fig_training_curve,
+               fig_rans_validation, fig_fidelity_transfer):
         try:
             fn(out)
             print(f"  {fn.__name__} ok", flush=True)

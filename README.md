@@ -18,6 +18,8 @@ experiment with no human step.
 python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12 --interpret
 ```
 
+- **[docs/results.md](docs/results.md)** — every measured number, with the
+  command that regenerates it
 - **[docs/surrogate.md](docs/surrogate.md)** — what the surrogate computes, how it
   is validated, and what it is not
 - **[docs/abstract_claims.md](docs/abstract_claims.md)** — every claim in the
