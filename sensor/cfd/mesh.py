@@ -117,14 +117,78 @@ def build_mesh(af: Airfoil, alpha_deg: float, out_msh: str | Path,
         else:
             foil_side.append(t)
 
+    # gmshToFoam builds its patches purely from physical *surface* groups. An
+    # empty group is not an error to gmsh, but it leaves OpenFOAM with zero
+    # patches, and gmshToFoam then dies on UPtrList<polyPatch>::last() with
+    # "Cannot dereference nullptr at index -1 in range [0,0)" -- a message that
+    # says nothing about the real cause. Fail here instead, where the cause is
+    # visible.
+    groups = {"airfoil": foil_side, "farfield": far_side, "frontAndBack": front_back}
+    empty = [name for name, tags in groups.items() if not tags]
+    if empty:
+        raise RuntimeError(
+            f"surface classification produced empty physical group(s): {empty}. "
+            f"Entities found: {len(gmsh.model.getEntities(2))} surfaces; "
+            f"foil={len(foil_side)} far={len(far_side)} frontBack={len(front_back)}; "
+            f"span={mp.span} radius={mp.radius} centre=({cx}, {cy}). "
+            f"gmshToFoam needs all three."
+        )
+
     gmsh.model.addPhysicalGroup(3, [vol], name="internal")
     gmsh.model.addPhysicalGroup(2, foil_side, name="airfoil")
     gmsh.model.addPhysicalGroup(2, far_side, name="farfield")
     gmsh.model.addPhysicalGroup(2, front_back, name="frontAndBack")
 
     gmsh.model.mesh.generate(3)
-    gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)  # gmshToFoam wants v2
+    # Must be set *before* write; gmshToFoam only parses MSH 2.2 ASCII, while
+    # gmsh 4.x defaults to 4.1.
+    gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
+    gmsh.option.setNumber("Mesh.Binary", 0)
+    gmsh.option.setNumber("Mesh.SaveAll", 0)  # physical groups only
     gmsh.write(str(out_msh))
+    _verify_msh(out_msh)
     ncell = len(gmsh.model.mesh.getElements(3)[1][0]) if gmsh.model.mesh.getElements(3)[1] else 0
     gmsh.finalize()
+    if ncell == 0:
+        raise RuntimeError(f"{out_msh}: mesh has no 3-D cells")
     return out_msh
+
+
+def _verify_msh(path) -> dict:
+    """Check a written ``.msh`` is something gmshToFoam can actually consume.
+
+    Catches the two failures that otherwise surface as an opaque OpenFOAM
+    segfault-adjacent abort: wrong file format version, and missing physical
+    names for the boundary patches.
+    """
+    from pathlib import Path
+
+    text = Path(path).read_text(errors="ignore")
+    lines = text.splitlines()
+
+    version = None
+    for i, line in enumerate(lines):
+        if line.startswith("$MeshFormat") and i + 1 < len(lines):
+            version = lines[i + 1].split()[0]
+            break
+    if version is None or not version.startswith("2"):
+        raise RuntimeError(
+            f"{path}: MSH format is {version!r}; gmshToFoam only reads 2.2. "
+            f"Set Mesh.MshFileVersion = 2.2 before gmsh.write()."
+        )
+
+    if "$PhysicalNames" not in text:
+        raise RuntimeError(
+            f"{path}: no $PhysicalNames block -- gmshToFoam will create zero "
+            f"patches and abort on UPtrList<polyPatch>::last()."
+        )
+    block = text.split("$PhysicalNames", 1)[1].split("$EndPhysicalNames", 1)[0]
+    names = {
+        part.split()[-1].strip('"')
+        for part in block.strip().splitlines()[1:]
+        if len(part.split()) >= 3
+    }
+    missing = {"airfoil", "farfield", "frontAndBack"} - names
+    if missing:
+        raise RuntimeError(f"{path}: physical names missing {sorted(missing)}; found {sorted(names)}")
+    return {"version": version, "names": sorted(names)}

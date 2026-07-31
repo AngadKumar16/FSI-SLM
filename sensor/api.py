@@ -203,9 +203,9 @@ def checkpoint_info(checkpoint: Union[str, Path] = DEFAULT_CHECKPOINT) -> dict:
     path = Path(checkpoint)
     if not path.exists():
         return {"trained": False, "checkpoint": str(path)}
-    import torch
+    from .model import load_checkpoint
 
-    ck = torch.load(str(path), map_location="cpu")
+    ck = load_checkpoint(path, map_location="cpu")
     hist = ck.get("history", [])
     return {
         "trained": True,

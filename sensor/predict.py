@@ -38,8 +38,10 @@ class SurrogatePredictor:
     ):
         import torch
 
+        from .model import load_checkpoint
+
         self.device = pick_device(device)
-        ck = torch.load(str(checkpoint), map_location=self.device)
+        ck = load_checkpoint(checkpoint, map_location=self.device)
         self.cfg = UNetConfig(**ck["config"])
         self.model = UNet(self.cfg).to(self.device)
         self.model.load_state_dict(ck["model"])
@@ -169,6 +171,25 @@ class SurrogatePredictor:
                 "alpha_deg": alpha_deg, "airfoil": af.name}
 
 
+def _converged_npz(cache: SensorCache) -> Dict[str, bool]:
+    """Map npz path -> convergence flag, read from each file's own metadata."""
+    out: Dict[str, bool] = {}
+    for case in cache.cases:
+        path = case.get("npz")
+        if not path or not Path(path).exists():
+            continue
+        try:
+            with np.load(path, allow_pickle=False) as z:
+                meta = json.loads(str(z["meta"]))
+        except Exception:
+            continue
+        conv = meta.get("converged")
+        # None means the backend has nothing to converge (the panel solve is
+        # closed-form), which counts as usable.
+        out[path] = True if conv is None else bool(conv)
+    return out
+
+
 def _avg_pool_np(a: np.ndarray, k: int) -> np.ndarray:
     h, w = a.shape[-2:]
     a = a[..., : h - h % k, : w - w % k]
@@ -182,19 +203,42 @@ def evaluate_split(
     device: str = "auto",
     limit: Optional[int] = None,
     out_path: Optional[Union[str, Path]] = None,
+    fidelity: Optional[str] = None,
+    converged_only: bool = False,
 ) -> dict:
     """Score the surrogate over a whole split, straight from the cache.
 
     Reports per-channel relative RMSE on the fields and, for the coefficients,
     both MAE and R^2 -- MAE alone hides the fact that Cd spans two decades.
+
+    ``fidelity`` restricts to ``"panel"`` or ``"rans"`` rows. Scoring a mixed
+    split gives a number that is neither: the panel-trained network is being
+    asked to reproduce its own training distribution on some rows and a
+    different solver's answer on others. Report them apart.
+
+    ``converged_only`` additionally drops RANS rows whose residuals never fell,
+    which for a steady solver on separated flow is most of the post-stall
+    sweep. Comparing against a limit-cycle snapshot measures nothing.
     """
     import torch
 
     p = SurrogatePredictor(checkpoint, device)
     cache = SensorCache(cache_dir)
-    idx = cache.indices(split)
+    idx = cache.indices(split, fidelity=fidelity)
+    if converged_only:
+        conv = _converged_npz(cache)
+        idx = np.asarray(
+            [i for i in idx if conv.get(cache.cases[int(i)]["npz"], True)],
+            dtype=np.int64,
+        )
     if limit:
         idx = idx[:limit]
+    if idx.size == 0:
+        raise ValueError(
+            f"no cases in split '{split}'"
+            + (f" at fidelity '{fidelity}'" if fidelity else "")
+            + (" that converged" if converged_only else "")
+        )
 
     x_mean = np.asarray(p.stats["x_mean"], np.float32)[:, None, None]
     x_std = np.asarray(p.stats["x_std"], np.float32)[:, None, None]
@@ -255,6 +299,8 @@ def evaluate_split(
     }
     result = {
         "split": split,
+        "fidelity": fidelity or "all",
+        "converged_only": converged_only,
         "n_cases": int(len(idx)),
         "checkpoint": str(checkpoint),
         "downsample": p.downsample,

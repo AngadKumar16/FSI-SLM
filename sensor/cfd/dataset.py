@@ -35,7 +35,7 @@ from ..sdf import Grid
 from ..simulate import pack_npz
 from .case import CaseParams, write_case
 from .mesh import MeshParams, build_mesh
-from .run import convert_mesh, read_force_coeffs, solve
+from .run import convert_mesh, read_force_coeffs, read_residuals, solve
 from .sample import sample_case
 
 # Denser through stall than the panel sweep: that is the band where the two
@@ -53,6 +53,7 @@ def run_one(
     reynolds: float = 5.0e5,
     keep_case: bool = False,
     grid: Optional[Grid] = None,
+    average_last: int = 500,
 ) -> dict:
     """Solve and pack one RANS case. Never raises; failures come back as rows."""
     dat_path = Path(dat_path)
@@ -84,12 +85,29 @@ def run_one(
         write_case(case, CaseParams(reynolds=reynolds, span=MeshParams().span))
         convert_mesh(case, msh)
         res = solve(case)
-        row["converged"] = res.returncode == 0
-        fc = read_force_coeffs(case)
+        if res.returncode != 0:
+            raise RuntimeError(f"simpleFoam failed:\n{res.stdout[-1500:]}")
+
+        # Return code says only that the binary ran. Convergence has to come
+        # from the residuals.
+        conv = read_residuals(case)
+        fc = read_force_coeffs(case, average_last=average_last)
+        row.update({
+            "converged": conv["converged"],
+            "residual_max": conv["residual_max"],
+            "iterations": conv["iterations"],
+            "convergence_note": conv["reason"],
+            "cl_std": fc.get("Cl_std"),
+            "cd_std": fc.get("Cd_std"),
+            "n_averaged": fc.get("n_averaged"),
+        })
 
         sample = sample_case(
             case, af, alpha_deg, reynolds, grid,
             cl=fc.get("Cl"), cd=fc.get("Cd"), cm=fc.get("Cm"),
+            converged=conv["converged"],
+            residual_max=conv["residual_max"],
+            cl_std=fc.get("Cl_std"), cd_std=fc.get("Cd_std"),
         )
         packed = pack_npz(sample)
         np.savez_compressed(npz, **packed)
@@ -100,7 +118,10 @@ def run_one(
         row["error"] = f"{type(exc).__name__}: {exc}"
         row["traceback"] = traceback.format_exc()[-1500:]
     finally:
-        if not keep_case:
+        # Never delete a case that failed. Wiping it removes the .msh, the
+        # OpenFOAM logs and constant/polyMesh -- i.e. everything needed to
+        # diagnose why it failed -- and leaves only a stack trace.
+        if not keep_case and row["ok"]:
             shutil.rmtree(case, ignore_errors=True)
     return row
 
