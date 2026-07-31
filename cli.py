@@ -729,13 +729,23 @@ def sensor_eval(
     split: str = "test",
     device: str = "auto",
     out_path: str = "artifacts/sensor/eval_test.json",
+    fidelity: Optional[str] = None,
+    converged_only: bool = False,
 ) -> None:
-    """Score the surrogate on a held-out split (NACA 0009 is in the test set)."""
+    """Score the surrogate on a held-out split (NACA 0009 is in the test set).
+
+    ``--fidelity panel`` or ``--fidelity rans`` scores one solver's rows only.
+    A mixed score is neither number: on panel rows the network is reproducing
+    its own training distribution, on RANS rows it is being checked against a
+    different solver. ``--converged-only`` further drops RANS cases whose
+    residuals never fell.
+    """
     from sensor.predict import evaluate_split
 
     print(json.dumps(evaluate_split(
         _resolve_path(checkpoint), _resolve_path(cache_dir), split, device,
-        out_path=_resolve_path(out_path),
+        out_path=_resolve_path(out_path), fidelity=fidelity,
+        converged_only=converged_only,
     ), indent=2))
 
 
@@ -901,6 +911,21 @@ def demo(seed: int = 0, sweep: bool = False) -> None:
 def main() -> None:
     """Main entry point - dispatches to subcommands via fire.Fire."""
     import fire
+
+    # Interactive zsh does not treat '#' as a comment (INTERACTIVE_COMMENTS is
+    # off by default), so a trailing note on a pasted command arrives here as
+    # positional arguments. Silently, they bind to whatever parameter comes
+    # next: a stray "# expect ..." became the manifest path, and a stray word
+    # became --device. Both wasted a run. Stop at the comment instead.
+    for i, tok in enumerate(sys.argv[1:], start=1):
+        if tok.startswith("#"):
+            trailing = " ".join(sys.argv[i:])
+            raise SystemExit(
+                f"error: shell comment reached the CLI as arguments: {trailing!r}\n"
+                f"Interactive zsh does not strip '#'. Remove the comment, or run "
+                f"`setopt interactivecomments` once to enable it."
+            )
+
     fire.Fire({
         "generate-data": generate_data,
         "build-dataset": build_dataset,

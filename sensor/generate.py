@@ -72,6 +72,15 @@ def _series_of(path: Path) -> str:
     return path.parent.name
 
 
+# Higher wins when the same (foil, alpha) exists at more than one fidelity.
+FIDELITY_RANK = {"panel": 0, "rans": 1}
+
+
+def _rank(row: dict) -> tuple:
+    """Merge precedence: fidelity first, then completeness."""
+    return (FIDELITY_RANK.get(row.get("fidelity") or "panel", 0), _richness(row))
+
+
 def _richness(row: dict) -> int:
     """How complete a manifest row is; used to break merge ties."""
     return int(bool(row.get("ok"))) + sum(
@@ -102,6 +111,14 @@ def _row_from_meta(meta: dict) -> dict:
         "mass_ratio": m.get("mass_ratio"),
         "reduced_velocity": m.get("reduced_velocity"),
         "fidelity": meta.get("fidelity", "panel"),
+        # Carried into the manifest so a whole sweep can be audited at once:
+        # a RANS row whose structural channels came from "raster_probe" rather
+        # than "openfoam_patch" has deflection targets biased low.
+        "surface_source": meta.get("surface_source"),
+        "converged": meta.get("converged"),
+        "residual_max": meta.get("residual_max"),
+        "cl_std": meta.get("cl_std"),
+        "cd_std": meta.get("cd_std"),
     }
 
 
@@ -276,17 +293,25 @@ def finalize_manifest(out_dir: str | Path, n_alphas: int = len(DEFAULT_ALPHAS)) 
     out = Path(out_dir)
     rows_dir = out / "rows"
     merged: Dict[tuple, dict] = {}
-    for chunk in sorted(rows_dir.glob("chunk_*.jsonl")) if rows_dir.exists() else []:
+    # Any .jsonl in rows/, not just "chunk_*": the OpenFOAM driver writes
+    # "rans_<timestamp>.jsonl", and a narrower glob silently ignored an entire
+    # RANS sweep -- 15 solved cases, over an hour of compute, merged into
+    # nothing with no error.
+    for chunk in sorted(rows_dir.glob("*.jsonl")) if rows_dir.exists() else []:
         for line in chunk.read_text().splitlines():
             if not line.strip():
                 continue
             r = json.loads(line)
             key = (r.get("foil"), r.get("alpha_deg"))
             prev = merged.get(key)
-            # Chunks from different runs can disagree in richness (an early run
-            # predates the embedded metadata). Keep the row that actually
-            # carries the physics fields rather than whichever file sorts last.
-            if prev is not None and _richness(prev) > _richness(r):
+            # Rank by fidelity first, richness second. A RANS row legitimately
+            # lacks the panel backend's viscous-model scalars (f_sep and
+            # friends), so it scores *lower* on richness than the panel row it
+            # is meant to replace -- ranking on richness alone silently threw
+            # away every expensive case at an angle the cheap sweep had already
+            # covered. Chunks from an early run that predates the embedded
+            # metadata are still resolved by richness within a fidelity.
+            if prev is not None and _rank(prev) > _rank(r):
                 continue
             merged[key] = r
 

@@ -191,10 +191,38 @@ def masked_loss(
     }
 
 
+def load_checkpoint(path, map_location=None):
+    """``torch.load`` for our own checkpoints, across the 2.6 default change.
+
+    PyTorch 2.6 flipped ``weights_only`` to ``True``. Our checkpoints are not
+    bare tensors -- they carry the config dict, normalisation statistics and the
+    training history -- so the safe unpickler rejects them::
+
+        _pickle.UnpicklingError: Weights only load failed.
+        WeightsUnpickler error: Unsupported global: GLOBAL getattr
+
+    These files are written by this repository, so loading them with the full
+    unpickler is the intended behaviour, not a security relaxation of untrusted
+    input. Older torch has no such keyword, hence the fallback.
+    """
+    try:
+        return torch.load(str(path), map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(str(path), map_location=map_location)
+
+
 def pick_device(preference: str = "auto") -> torch.device:
     """``auto`` resolves to CUDA, then Apple MPS, then CPU."""
     if preference != "auto":
-        return torch.device(preference)
+        try:
+            return torch.device(preference)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"invalid device {preference!r}. Expected 'auto', 'cpu', 'mps' or "
+                f"'cuda'. A stray shell word is the usual cause -- note that "
+                f"interactive zsh does not treat '#' as a comment, so a trailing "
+                f"'# note' on a command becomes positional arguments. ({exc})"
+            ) from None
     if torch.cuda.is_available():
         return torch.device("cuda")
     if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():

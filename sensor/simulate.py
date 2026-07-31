@@ -182,6 +182,16 @@ def pack_npz(case: dict) -> dict:
                    for k, v in case["coeffs"].items()},
         "modal": case.get("modal", {}),
         "fidelity": case.get("fidelity", "panel"),
+        # Which route produced the surface pressure the structural channels were
+        # built from: "openfoam_patch" is exact, "raster_probe" smooths the
+        # leading-edge suction peak and biases the deflection targets low.
+        "surface_source": case.get("surface_source", "solver"),
+        # None for the panel backend, which is a closed-form solve with no
+        # iteration to converge.
+        "converged": case.get("converged"),
+        "residual_max": case.get("residual_max"),
+        "cl_std": case.get("cl_std"),
+        "cd_std": case.get("cd_std"),
         # Only the panel backend has a viscous-state model; a RANS row resolves
         # separation directly and has no equivalent scalars.
         "state": state.to_dict() if state is not None else {},

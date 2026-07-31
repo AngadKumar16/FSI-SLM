@@ -70,35 +70,81 @@ def build_cache(
     index_path = out / "index.json"
     fidelity_names = sorted({(r.get("fidelity") or "panel") for r in rows})
     fidelity_codes = {name: i for i, name in enumerate(fidelity_names)}
+    def _mtime(path: str) -> float:
+        try:
+            return round(Path(path).stat().st_mtime, 3)
+        except OSError:
+            return 0.0
+
     index = {
         "cases": [{"foil": r["foil"], "alpha_deg": r["alpha_deg"], "npz": r["npz"],
                    "series": r["series"], "dat": r["dat"],
-                   "fidelity": r.get("fidelity") or "panel"} for r in rows],
+                   "fidelity": r.get("fidelity") or "panel",
+                   "mtime": _mtime(r["npz"])} for r in rows],
         "splits": json.loads(Path(splits_path).read_text()),
         "grid": {"nx": grid.nx, "ny": grid.ny, "xlim": list(grid.xlim), "ylim": list(grid.ylim)},
         "scalar_names": list(SCALAR_NAMES),
         "fidelity_codes": fidelity_codes,
     }
+    # The `done` flags are positional. If the manifest changed -- rows added, or
+    # a (foil, alpha) upgraded from panel to RANS and now pointing at a
+    # different .npz -- those flags refer to different cases and the cache would
+    # silently keep serving stale targets. Compare the case list and start over
+    # when it moved. (Symptom when this was missing: a RANS sweep merged, then
+    # `sensor-cache` reported "cached 1926, remaining 0, seconds 0.0" and every
+    # array still held the panel data.)
+    stale = True
+    changed_rows: List[int] = []
+    if index_path.exists():
+        try:
+            old = json.loads(index_path.read_text())
+            old_cases = old.get("cases", [])
+            key = lambda c: (c["foil"], c["alpha_deg"], c.get("npz"))
+            stale = [key(c) for c in old_cases] != [key(c) for c in index["cases"]]
+            if not stale:
+                # Same cases in the same order, but a case can have been
+                # *re-solved in place*: identical foil, angle and path, new
+                # contents. Comparing the list alone missed that entirely --
+                # re-running two cases to fix a biased Cd left the cache serving
+                # the old arrays and `build_cache` reporting "seconds: 0.0".
+                changed_rows = [
+                    i for i, (o, c) in enumerate(zip(old_cases, index["cases"]))
+                    if o.get("mtime") != c.get("mtime")
+                ]
+        except Exception:
+            stale = True
     index_path.write_text(json.dumps(index))
+    if stale:
+        print(f"case list changed -- rebuilding cache for {n} cases", flush=True)
+
+    mode_for = lambda path: "w+" if (stale or not path.exists()) else "r+"
 
     maps = {}
     for key, (fname, dtype, ch) in CACHE_FILES.items():
         path = out / fname
-        mode = "r+" if path.exists() else "w+"
         maps[key] = np.lib.format.open_memmap(
-            path, mode=mode, dtype=dtype, shape=(n, ch, grid.ny, grid.nx)
+            path, mode=mode_for(path), dtype=dtype, shape=(n, ch, grid.ny, grid.nx)
         )
     sc_path = out / "scalars.npy"
     scalars = np.lib.format.open_memmap(
-        sc_path, mode="r+" if sc_path.exists() else "w+", dtype=np.float32, shape=(n, 5)
+        sc_path, mode=mode_for(sc_path), dtype=np.float32, shape=(n, 5)
     )
     done_path = out / "done.npy"
     done = np.lib.format.open_memmap(
-        done_path, mode="r+" if done_path.exists() else "w+", dtype=bool, shape=(n,)
+        done_path, mode=mode_for(done_path), dtype=bool, shape=(n,)
     )
+    if stale:
+        done[:] = False
+    elif changed_rows:
+        print(
+            f"{len(changed_rows)} case(s) re-solved since the last cache build "
+            f"-- refreshing them", flush=True,
+        )
+        for i in changed_rows:
+            done[i] = False
     fid_path = out / "fidelity.npy"
     fidelity = np.lib.format.open_memmap(
-        fid_path, mode="r+" if fid_path.exists() else "w+", dtype=np.int8, shape=(n,)
+        fid_path, mode=mode_for(fid_path), dtype=np.int8, shape=(n,)
     )
     for i, r in enumerate(rows):
         fidelity[i] = fidelity_codes[r.get("fidelity") or "panel"]

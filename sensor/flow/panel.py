@@ -155,6 +155,16 @@ class PanelSolver:
 
         an = us * self.nx[:, None] + vs * self.ny[:, None]
         at = us * self.tx[:, None] + vs * self.ty[:, None]
+        if not (np.all(np.isfinite(an)) and np.all(np.isfinite(at))):
+            bad = np.argwhere(~np.isfinite(at))
+            i, j = (int(bad[0][0]), int(bad[0][1])) if bad.size else (-1, -1)
+            raise RuntimeError(
+                f"influence matrix is not finite: first bad entry at panel "
+                f"({i}, {j}), panel lengths {self.s[i]:.3e}/{self.s[j]:.3e}, "
+                f"control point ({self.xc[i]:.5f}, {self.yc[i]:.5f}). "
+                f"Usually a duplicated or near-duplicated coordinate in the "
+                f".dat file that survived deduplication."
+            )
 
         av_n = (uv * self.nx[:, None] + vv * self.ny[:, None]).sum(axis=1)
         av_t = (uv * self.tx[:, None] + vv * self.ty[:, None]).sum(axis=1)
@@ -172,10 +182,41 @@ class PanelSolver:
         )
 
         sol = np.linalg.solve(a_mat, rhs)
+        # A near-singular system does not raise: LAPACK returns values that are
+        # finite but astronomically large, and they only surface later as
+        # overflow warnings inside the surface-velocity matmul, naming nothing.
+        # Checking finiteness alone misses that case -- the magnitude is what
+        # gives it away. Source strengths are O(1) for a unit-chord foil in a
+        # unit freestream.
+        worst = float(np.max(np.abs(sol))) if sol.size else 0.0
+        if not np.all(np.isfinite(sol)) or worst > 1e6:
+            k = int(np.argmin(self.s))
+            raise RuntimeError(
+                f"panel system is ill-conditioned: max|solution| = {worst:.3e} "
+                f"(expected O(1)), {int((~np.isfinite(sol)).sum())} non-finite. "
+                f"n_panels={self.n}, cond={np.linalg.cond(a_mat):.3e}, "
+                f"shortest panel {self.s[k]:.3e} at index {k} "
+                f"({self.xc[k]:.4f}, {self.yc[k]:.4f}), "
+                f"chord={self.x.max() - self.x.min():.4f}"
+            )
         sigma = sol[: self.n]
         gamma = float(sol[self.n])
 
-        vt = at @ sigma + av_t * gamma + (vx * self.tx + vy * self.ty)
+        # Apple's Accelerate BLAS raises the divide-by-zero and overflow FPE
+        # flags during some GEMM calls even when every input and every output
+        # is finite and correctly valued. NumPy 2 surfaces those flags as
+        # RuntimeWarnings attributed to this line. Both operands were already
+        # checked finite above and the solution magnitude was bounded, so the
+        # flags carry no information here -- suppress them, then verify the
+        # result rather than trusting the suppression.
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            vt = at @ sigma + av_t * gamma + (vx * self.tx + vy * self.ty)
+        if not np.all(np.isfinite(vt)):
+            raise RuntimeError(
+                f"surface velocity is not finite on {int((~np.isfinite(vt)).sum())} "
+                f"of {vt.size} panels: max|sigma| = {np.max(np.abs(sigma)):.3e}, "
+                f"gamma = {gamma:.3e}"
+            )
         cp = 1.0 - (vt / uinf) ** 2
 
         # Kutta-Joukowski. Panels were forced clockwise in __init__, which fixes

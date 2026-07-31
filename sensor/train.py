@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .data import SensorCache, compute_norm_stats, make_torch_dataset
-from .model import UNet, UNetConfig, masked_loss, pick_device
+from .model import UNet, UNetConfig, load_checkpoint, masked_loss, pick_device
 
 DEFAULT_RUN_DIR = "artifacts/sensor/run"
 
@@ -154,7 +154,7 @@ def train(
     history = []
     best = math.inf
     if resume and ckpt_path.exists():
-        ck = torch.load(ckpt_path, map_location=dev)
+        ck = load_checkpoint(ckpt_path, map_location=dev)
         if ck.get("config") == cfg.to_dict() and ck.get("downsample") == downsample:
             model.load_state_dict(ck["model"])
             opt.load_state_dict(ck["optimizer"])

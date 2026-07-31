@@ -112,12 +112,30 @@ def surface_cp_from_case(case_dir, solver: PanelSolver) -> Optional[np.ndarray]:
                 break
         if block is None:
             return None
-        pts = np.asarray(block.points)[:, :2]
-        pvals = np.asarray(block["p"]).ravel()
+        # Pressure may be stored per point or per cell depending on whether
+        # cell_to_point_creation fired for this patch. Pick the array whose
+        # length matches its own carrier, and derive matching coordinates --
+        # zipping point coordinates against cell values silently mismatched
+        # lengths and blew up in np.add.at with "array is not broadcastable to
+        # correct shape".
+        points = np.asarray(block.points)[:, :2]
+        pvals = None
+        pts = None
+        if "p" in getattr(block, "point_data", {}):
+            cand = np.asarray(block.point_data["p"]).ravel()
+            if cand.size == points.shape[0]:
+                pts, pvals = points, cand
+        if pvals is None and "p" in getattr(block, "cell_data", {}):
+            cand = np.asarray(block.cell_data["p"]).ravel()
+            centres = np.asarray(block.cell_centers().points)[:, :2]
+            if cand.size == centres.shape[0]:
+                pts, pvals = centres, cand
+        if pvals is None or pts is None or pts.shape[0] == 0:
+            return None
     except Exception:
         return None
 
-    # nearest control point for each patch node, then average per panel
+    # nearest control point for each patch sample, then average per panel
     d2 = (
         (pts[:, None, 0] - solver.xc[None, :]) ** 2
         + (pts[:, None, 1] - solver.yc[None, :]) ** 2
@@ -167,6 +185,10 @@ def build_case_arrays(
     cd: Optional[float] = None,
     cm: Optional[float] = None,
     fidelity: str = "rans",
+    converged: Optional[bool] = None,
+    residual_max: Optional[float] = None,
+    cl_std: Optional[float] = None,
+    cd_std: Optional[float] = None,
     e_star: float = DEFAULT_E_STAR,
     spar_x: float = DEFAULT_SPAR_X,
     n_panels: int = N_PANELS,
@@ -186,10 +208,15 @@ def build_case_arrays(
     section = section_properties(af.xy)
     poly = resample_polygon(rotate(af, alpha_deg).xy, n_panels)
     solver = PanelSolver(poly)
-    # Solved only to populate the panel geometry (control points, normals,
-    # lengths) that the surface probe and the Cp integration index into. The
-    # inviscid velocities are discarded -- the fields come from the caller.
-    solver.solve(0.0)
+    # Deliberately *not* solved. Only the panel geometry is needed here --
+    # control points, normals and lengths, all built in __init__ -- because the
+    # fields come from the caller and the surface pressure comes from the CFD
+    # patch. Running the solve was pure waste, and on some BLAS builds the
+    # near-singular system returned finite-but-astronomical source strengths
+    # that overflowed in the surface-velocity matmul:
+    #     RuntimeWarning: overflow encountered in matmul
+    # The result was discarded either way, so the warning looked like a
+    # corrupted RANS case when nothing was wrong with it.
 
     sdf, _edge = signed_distance_and_edge(solver.xy, grid)
     fluid = sdf > 0.0
@@ -201,10 +228,17 @@ def build_case_arrays(
     v = np.where(fluid, np.nan_to_num(v), 0.0).astype(np.float32)
     p = np.where(fluid, np.nan_to_num(p), 0.0).astype(np.float32)
 
+    surface_source = "supplied"
     if surface_cp is None and case_dir is not None:
         surface_cp = surface_cp_from_case(case_dir, solver)
+        surface_source = "openfoam_patch" if surface_cp is not None else None
     if surface_cp is None:
+        # The raster probe smooths the leading-edge suction peak at 42 px/chord,
+        # which is where most of the chordwise load sits, so deflection targets
+        # come out low. Record which route was used rather than letting a silent
+        # fallback look like a patch read.
         surface_cp = surface_cp_from_field(p, grid, solver, fluid)
+        surface_source = "raster_probe"
     surface_cp = np.asarray(surface_cp, dtype=float)
 
     dcp = surface_dcp(
@@ -248,7 +282,15 @@ def build_case_arrays(
         "polygon": solver.xy,
         "surface_dcp": dcp,
         "surface_cp": surface_cp,
+        "surface_source": surface_source,
         "fidelity": fidelity,
+        # Solution quality travels with the case. A steady RANS run that never
+        # settled still produces fields and coefficients; without these a
+        # non-converged stall point is indistinguishable from a good one.
+        "converged": converged,
+        "residual_max": residual_max,
+        "cl_std": cl_std,
+        "cd_std": cd_std,
         # The panel backend attaches its viscous state here; a RANS row has no
         # equivalent scalar model, and downstream code treats it as optional.
         "state": None,
