@@ -34,7 +34,7 @@ import numpy as np
 
 from .flow.solve import N_PANELS, foil_constants, solve_case
 from .geometry import Airfoil, close_trailing_edge
-from .sdf import Grid, input_tensor
+from .sdf import DEFAULT_SPEC, Grid, build_input, input_tensor
 from .structure.beam import (
     DEFAULT_E_STAR,
     DEFAULT_SPAR_X,
@@ -49,7 +49,9 @@ from .structure.beam import (
 )
 
 TARGET_CHANNELS = ("u", "v", "p", "load", "disp")
-INPUT_CHANNELS = ("sdf", "fs_x", "fs_y", "log_re")
+# The active input contract. Named channels and their mirror parities live in
+# :mod:`sensor.sdf`; this is only a convenience re-export.
+INPUT_CHANNELS = DEFAULT_SPEC.names
 
 
 @dataclass
@@ -118,7 +120,14 @@ def simulate_case(
     load_field, disp_field = rasterize_structure(struct, flow["polygon"], xg, yg, solid)
 
     # --- tensors -------------------------------------------------------------
-    inp = input_tensor(prep.airfoil, alpha_deg, reynolds, grid, sdf=flow["sdf"])
+    # The inviscid raster is already in hand from the same panel solve that
+    # produced the target, so the prior channels cost nothing here.
+    inp = build_input(
+        prep.airfoil, alpha_deg, reynolds, grid,
+        sdf=flow["sdf"],
+        prior={"u": flow["u_pot"], "v": flow["v_pot"], "p": flow["p_pot"]},
+        fidelity="panel",
+    )
     target = np.stack([
         flow["u"], flow["v"], flow["p"], load_field, disp_field
     ]).astype(np.float32)

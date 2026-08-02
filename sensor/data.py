@@ -32,11 +32,13 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .geometry import load_dat
-from .sdf import Grid, input_tensor
+from .sdf import DEFAULT_SPEC, Grid, InputSpec, build_input
 from .simulate import CasePrep, SCALAR_NAMES
 
+# Channel counts for ``inputs`` come from the active :class:`InputSpec`, so the
+# entry below is a placeholder that :func:`build_cache` overrides.
 CACHE_FILES = {
-    "inputs": ("inputs.npy", np.float16, 4),
+    "inputs": ("inputs.npy", np.float16, None),
     "targets": ("targets.npy", np.float16, 5),
     "masks": ("masks.npy", np.uint8, 2),
 }
@@ -58,9 +60,16 @@ def build_cache(
     grid: Optional[Grid] = None,
     time_budget_s: Optional[float] = None,
     progress_every: int = 200,
+    spec: Optional[InputSpec] = None,
 ) -> dict:
-    """Materialise the memmap cache. Safe to call repeatedly to resume."""
+    """Materialise the memmap cache. Safe to call repeatedly to resume.
+
+    ``spec`` selects the input channel contract (:mod:`sensor.sdf`). Changing it
+    invalidates the cached inputs, which is detected here rather than left to
+    produce a shape mismatch four minutes into training.
+    """
     grid = grid or Grid()
+    spec = spec or DEFAULT_SPEC
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     rows = read_manifest(manifest)
@@ -85,6 +94,7 @@ def build_cache(
         "grid": {"nx": grid.nx, "ny": grid.ny, "xlim": list(grid.xlim), "ylim": list(grid.ylim)},
         "scalar_names": list(SCALAR_NAMES),
         "fidelity_codes": fidelity_codes,
+        "input_spec": spec.to_dict(),
     }
     # The `done` flags are positional. If the manifest changed -- rows added, or
     # a (foil, alpha) upgraded from panel to RANS and now pointing at a
@@ -101,6 +111,16 @@ def build_cache(
             old_cases = old.get("cases", [])
             key = lambda c: (c["foil"], c["alpha_deg"], c.get("npz"))
             stale = [key(c) for c in old_cases] != [key(c) for c in index["cases"]]
+            # A different channel contract means every cached input row is the
+            # wrong width. Catch it here; the alternative is a shape error deep
+            # inside the first training step.
+            if old.get("input_spec", {}).get("names") != list(spec.names):
+                stale = True
+                print(
+                    f"input spec changed -> {spec.name} "
+                    f"({spec.n_channels} channels); rebuilding inputs",
+                    flush=True,
+                )
             if not stale:
                 # Same cases in the same order, but a case can have been
                 # *re-solved in place*: identical foil, angle and path, new
@@ -122,8 +142,9 @@ def build_cache(
     maps = {}
     for key, (fname, dtype, ch) in CACHE_FILES.items():
         path = out / fname
+        n_ch = spec.n_channels if key == "inputs" else ch
         maps[key] = np.lib.format.open_memmap(
-            path, mode=mode_for(path), dtype=dtype, shape=(n, ch, grid.ny, grid.nx)
+            path, mode=mode_for(path), dtype=dtype, shape=(n, n_ch, grid.ny, grid.nx)
         )
     sc_path = out / "scalars.npy"
     scalars = np.lib.format.open_memmap(
