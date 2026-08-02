@@ -328,7 +328,21 @@ def shedding_frequency(
     if not band.any():
         return {"f_shed": None, "reason": "no spectral bin inside the search band"}
     idx = np.flatnonzero(band)[int(np.argmax(spec[band]))]
-    f = float(freq[idx])
+    df = float(freq[1] - freq[0])
+    # Sub-bin interpolation. The bin spacing is 1 / (record length), so an 80
+    # convective-time record resolves frequency only to about 0.0125 -- 6% of a
+    # typical shedding Strouhal number, and the lock-in test downstream compares
+    # f_shed to f_n at the few-percent level. Fitting a parabola through the
+    # peak bin and its two neighbours recovers the true peak to a fraction of a
+    # bin, which is standard practice for a windowed periodogram and costs three
+    # array lookups.
+    offset = 0.0
+    if 0 < idx < spec.size - 1:
+        a, b, c = (float(np.log(max(spec[i], 1e-300))) for i in (idx - 1, idx, idx + 1))
+        denom = a - 2.0 * b + c
+        if denom != 0.0:
+            offset = float(np.clip(0.5 * (a - c) / denom, -0.5, 0.5))
+    f = float(freq[idx] + offset * df)
 
     # Peak prominence: a genuine shedding tone stands well clear of the local
     # background. Without this an attached case with no organised street returns

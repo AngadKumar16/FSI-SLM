@@ -76,6 +76,32 @@ def _resolve_path(path_str: str) -> str:
     return str(p.resolve())
 
 
+def _flag(name: str, value) -> bool:
+    """Coerce a boolean CLI flag, refusing the shape that silently inverts it.
+
+    ``fire`` parses values with ``ast.literal_eval`` and falls back to the raw
+    string. So ``--tta False`` gives ``False`` but ``--tta false`` gives the
+    *string* ``"false"``, which is truthy -- the flag reads as switched off and
+    behaves as switched on, with no error anywhere. That is the single easiest
+    way to publish an ablation that never ablated anything, so it is rejected
+    here rather than tolerated.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "yes", "1", "on"):
+            return True
+        if low in ("false", "no", "0", "off"):
+            raise SystemExit(
+                f"--{name.replace('_', '-')} was given the string {value!r}. "
+                f"fire only reads Python literals, so a lowercase 'false' is a "
+                f"non-empty string and counts as true. Write "
+                f"--{name.replace('_', '-')}=False or --no-{name.replace('_', '-')}."
+            )
+    return bool(value)
+
+
 def generate_data(
     n_per_regime: int = 40,
     seed: Optional[int] = None,
@@ -798,7 +824,7 @@ def sensor_multifidelity(
     plan = plan_multifidelity_sweep(
         f"{out}/splits.json", f"{out}/manifest.jsonl", n_foils=n_foils, seed=seed
     )
-    if not run:
+    if not _flag("run", run):
         plan["hint"] = "re-run with --run to execute (hours of CFD)"
         print(json.dumps(plan, indent=2))
         return
@@ -856,7 +882,8 @@ def sensor_train(
         cache_dir=_resolve_path(cache_dir), run_dir=_resolve_path(run_dir),
         epochs=epochs, batch_size=batch_size, lr=lr, base=base, depth=depth,
         downsample=downsample, device=device, time_budget_s=time_budget_s,
-        resume=resume, augment=augment, fidelity_weights=weights,
+        resume=_flag("resume", resume), augment=_flag("augment", augment),
+        fidelity_weights=weights,
         init_from=_resolve_path(init_from) if init_from else None,
         ema_decay=ema_decay,
     ), indent=2))
@@ -886,7 +913,8 @@ def sensor_eval(
     print(json.dumps(evaluate_split(
         _resolve_path(checkpoint), _resolve_path(cache_dir), split, device,
         out_path=_resolve_path(out_path), fidelity=fidelity,
-        converged_only=converged_only, tta=tta,
+        converged_only=_flag("converged_only", converged_only),
+        tta=_flag("tta", tta),
     ), indent=2))
 
 
