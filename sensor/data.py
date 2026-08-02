@@ -189,8 +189,20 @@ def build_cache(
         if prep is None:
             prep = CasePrep.build(load_dat(r["dat"]))
             prep_cache = {r["dat"]: prep}  # foils are contiguous; keep one
-        maps["inputs"][i] = input_tensor(
-            prep.airfoil, r["alpha_deg"], r["reynolds"] if "reynolds" in r else 5e5, grid
+        re_i = r["reynolds"] if "reynolds" in r else 5e5
+        prior = None
+        if spec.needs_prior:
+            # One call gives the inviscid raster *and* the SDF, so the distance
+            # transform -- the expensive half of a row -- is not repeated inside
+            # ``build_input``.
+            from .flow.solve import potential_prior
+
+            prior = potential_prior(prep.airfoil, r["alpha_deg"], grid)
+        maps["inputs"][i] = build_input(
+            prep.airfoil, r["alpha_deg"], re_i, grid, spec,
+            sdf=prior["sdf"] if prior is not None else None,
+            prior=prior,
+            fidelity=r.get("fidelity") or "panel",
         ).astype(np.float16)
         done[i] = True
         built += 1
@@ -219,6 +231,7 @@ class SensorCache:
         self.cases = self.index["cases"]
         self.splits = self.index["splits"]
         self.scalar_names = self.index.get("scalar_names", list(SCALAR_NAMES))
+        self.spec = InputSpec.from_dict(self.index.get("input_spec"))
         self.inputs = np.load(self.dir / "inputs.npy", mmap_mode="r")
         self.targets = np.load(self.dir / "targets.npy", mmap_mode="r")
         self.masks = np.load(self.dir / "masks.npy", mmap_mode="r")
@@ -330,6 +343,8 @@ def make_torch_dataset(
     split: str,
     stats: dict,
     fidelity_weights: Optional[Dict[str, float]] = None,
+    augment: bool = False,
+    seed: int = 0,
 ):
     """Build a ``torch.utils.data.Dataset``; imported lazily so NumPy-only
     consumers of this module never pay for a torch import.
@@ -339,9 +354,24 @@ def make_torch_dataset(
     cases contribute 5% of the gradient at equal weight, which is not enough to
     move the network off the cheap targets; up-weighting is how the expensive
     ones actually count. Leave it ``None`` for uniform weighting.
+
+    ``augment`` mirrors half the rows about ``y = 0`` (:mod:`sensor.symmetry`).
+    This is an exact symmetry of the governing equations, not a heuristic
+    distortion: the mirrored row is a genuine solution of a genuine case, and
+    with an incidence sweep that runs -8 to +20 it is the only thing balancing
+    the two signs. Never enable it on validation -- a validation number has to
+    stay comparable across runs.
     """
     import torch
     from torch.utils.data import Dataset
+
+    from .symmetry import (
+        MASK_PARITY,
+        TARGET_PARITY,
+        normalised_field_parity,
+        normalised_input_parity,
+        normalised_scalar_parity,
+    )
 
     idx = cache.indices(split)
     weights = np.ones(len(idx), dtype=np.float32)
@@ -355,6 +385,19 @@ def make_torch_dataset(
     s_mean = torch.tensor(stats["s_mean"], dtype=torch.float32)
     s_std = torch.tensor(stats["s_std"], dtype=torch.float32)
 
+    # Mirroring has to happen in *normalised* space, and a sign flip alone is
+    # wrong there: (parity*s - mean)/std is not parity*(s - mean)/std unless the
+    # mean is zero, and cd, w_max and the pressure channel all have means far
+    # from zero. Each transform is therefore an affine (scale, shift) pair.
+    xs, xsh = normalised_input_parity(cache.spec, stats["x_mean"], stats["x_std"])
+    ys, ysh = normalised_field_parity(stats["y_mean"], stats["y_std"])
+    ss, ssh = normalised_scalar_parity(stats["s_mean"], stats["s_std"])
+    t = lambda a: torch.tensor(a, dtype=torch.float32)
+    x_par, x_shift = t(xs)[:, None, None], t(xsh)[:, None, None]
+    y_par, y_shift = t(ys)[:, None, None], t(ysh)[:, None, None]
+    s_par, s_shift = t(ss), t(ssh)
+    m_par = t(MASK_PARITY)[:, None, None]
+
     class _DS(Dataset):
         def __len__(self):
             return len(idx)
@@ -365,12 +408,28 @@ def make_torch_dataset(
             y = torch.from_numpy(np.asarray(cache.targets[j], dtype=np.float32))
             m = torch.from_numpy(np.asarray(cache.masks[j], dtype=np.float32))
             s = torch.from_numpy(np.asarray(cache.scalars[j], dtype=np.float32))
+            x = (x - x_mean) / x_std
+            y = (y - y_mean) / y_std
+            s = (s - s_mean) / s_std
+
+            # Drawn per access, not per row: a fixed flip per row would show the
+            # network only one orientation of each case for the whole run, which
+            # is a relabelled dataset rather than an augmented one. Reproducible
+            # through ``torch.manual_seed`` (and torch's own per-worker seeding).
+            flip = bool(augment and torch.rand(()) < 0.5)
+            if flip:
+                x = torch.flip(x, dims=(-2,)) * x_par + x_shift
+                y = torch.flip(y, dims=(-2,)) * y_par + y_shift
+                m = torch.flip(m, dims=(-2,)) * m_par
+                s = s * s_par + s_shift
+
             return {
-                "x": (x - x_mean) / x_std,
-                "y": (y - y_mean) / y_std,
+                "x": x,
+                "y": y,
                 "mask": m,
-                "s": (s - s_mean) / s_std,
+                "s": s,
                 "index": j,
+                "mirrored": int(flip),
                 "weight": torch.tensor(float(weights[i])),
                 "fidelity": int(cache.fidelity[j]),
             }
