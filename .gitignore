@@ -27,6 +27,17 @@ htmlcov/
 .idea/
 .DS_Store
 
+# Agent scratch. `.claude/worktrees/` holds *linked git worktrees* living inside
+# the repository, which git records as a gitlink (mode 160000) if it is allowed
+# to see them. With no .gitmodules to go with it that gitlink is dangling, and
+# every `git status` from a checkout that does not have the worktree at the same
+# absolute path dies with
+#   fatal: not a git repository: <repo>/.git/worktrees/<name>
+# One was committed in 8af6909 and did exactly that.
+.claude/worktrees/
+.claude/settings.local.json
+.claude/*.lock
+
 # Virtual envs
 venv/
 .venv/
