@@ -184,6 +184,65 @@ def build_dataset(
     }
 
 
+def plan_multifidelity_sweep(
+    splits_path: str | Path = "artifacts/cfd/splits.json",
+    manifest: str | Path = "artifacts/cfd/manifest.jsonl",
+    n_foils: int = 4,
+    steady_alphas: Sequence[float] = (-4.0, 0.0, 4.0, 6.0, 8.0),
+    unsteady_alphas: Sequence[float] = (12.0, 16.0, 20.0),
+    seed: int = 0,
+) -> dict:
+    """Choose which *training* foils to re-solve at high fidelity, and how.
+
+    The reason this is a function and not a shell loop: the only RANS cases in
+    the dataset so far are on NACA 0009, which is pinned to the *test* split.
+    Training on them would be training on test, so the multi-fidelity path has
+    been wired and tested but never actually used. What it needs is high-fidelity
+    rows on foils the network is allowed to see.
+
+    Foils are drawn one per series so the high-fidelity subset spans 4-digit,
+    5-digit and 6-series sections rather than three variations of one shape, and
+    the draw is seeded so the choice is reproducible and can be reported.
+
+    The angle split is the measured one: below stall a steady solve converges
+    and is a hundred times cheaper, above it a steady solve has no fixed point.
+    """
+    splits = json.loads(Path(splits_path).read_text())
+    train = set(splits["train"])
+    rows = [
+        json.loads(l) for l in Path(manifest).read_text().splitlines() if l.strip()
+    ]
+    by_foil = {}
+    for r in rows:
+        if r.get("ok") and r["foil"] in train:
+            by_foil.setdefault(r["foil"], r)
+
+    rng = np.random.default_rng(seed)
+    series = sorted({r["series"] for r in by_foil.values()})
+    picked = []
+    for s in series:
+        members = sorted(f for f, r in by_foil.items() if r["series"] == s)
+        if members:
+            picked.append(str(rng.permutation(members)[0]))
+    # Top up from whatever is left, still deterministically.
+    rest = sorted(f for f in by_foil if f not in set(picked))
+    picked.extend(str(f) for f in rng.permutation(rest)[: max(0, n_foils - len(picked))])
+    picked = sorted(picked[:n_foils])
+
+    dats = [by_foil[f]["dat"] for f in picked]
+    return {
+        "foils": picked,
+        "dats": dats,
+        "steady": {"alphas": list(steady_alphas), "cases": len(dats) * len(steady_alphas)},
+        "unsteady": {"alphas": list(unsteady_alphas),
+                     "cases": len(dats) * len(unsteady_alphas)},
+        "note": (
+            "these are train-split foils, so the resulting rows are legitimate "
+            "training data; NACA 0009 stays in test and stays panel-free"
+        ),
+    }
+
+
 def _log(row: dict, done: int, total: int, t0: float) -> None:
     status = "ok" if row["ok"] else f"FAIL {row['error']}"
     el = time.time() - t0

@@ -267,6 +267,32 @@ def _signal(rng, t, freq, amp, mean, noise, harmonics=False):
     return sig + noise * rng.standard_normal(t.shape)
 
 
+def _measured_shedding(case: dict, cfg: TwinConfig):
+    """``(f_hz, note)`` from an unsteady solve, or ``None`` if there wasn't one.
+
+    The solver runs nondimensional (``c = 1``, ``Uinf = 1``), so its frequency
+    is a chord-based Strouhal number; the rig has a real chord and a real
+    freestream, hence the conversion here rather than in the solver.
+
+    A case whose spectral peak did not stand clear of the background is rejected
+    even though a number exists: an attached foil has no organised street, and
+    reporting the largest noise bin as a shedding frequency would be worse than
+    admitting the correlation is all there is.
+    """
+    u = (case.get("unsteady") or {})
+    st = u.get("strouhal_chord")
+    if not st or not u.get("organised_shedding"):
+        return None
+    f = float(st) * cfg.u_inf_m_s / max(cfg.chord_m, 1e-6)
+    note = "shedding frequency measured from the URANS lift signal"
+    if not u.get("statistically_steady", False):
+        note += (
+            "; the averaging window did not pass the stationarity check, so "
+            "treat the value as provisional"
+        )
+    return f, note
+
+
 def build_raw_experiment(
     case: dict,
     cfg: TwinConfig,
@@ -292,10 +318,19 @@ def build_raw_experiment(
     wf = wake_features(u, v, sdf, grid)
     suction = 1.0 if case["alpha_deg"] >= 0 else -1.0
     sep_x = separation_point(u, sdf, grid, suction)
-    f_shed, shed_note = shedding_frequency(
-        wf["wake_width_over_c"], cfg, case["alpha_deg"],
-        float(coeffs.get("max_thickness", 0.09)),
-    )
+    # A URANS case *measured* the shedding frequency; everything else has to
+    # fall back on the Fage-Johansen correlation. Prefer the measurement when
+    # the caller has one, and record which it was -- the difference between a
+    # measured and a correlated frequency is the difference between a lock-in
+    # call that means something and one that restates an assumption.
+    measured = _measured_shedding(case, cfg)
+    if measured is not None:
+        f_shed, shed_note = measured
+    else:
+        f_shed, shed_note = shedding_frequency(
+            wf["wake_width_over_c"], cfg, case["alpha_deg"],
+            float(coeffs.get("max_thickness", 0.09)),
+        )
 
     modal = case["modal"]
     f_n = modal["natural_frequency_hz"]

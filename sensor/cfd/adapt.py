@@ -189,6 +189,7 @@ def build_case_arrays(
     residual_max: Optional[float] = None,
     cl_std: Optional[float] = None,
     cd_std: Optional[float] = None,
+    unsteady: Optional[dict] = None,
     e_star: float = DEFAULT_E_STAR,
     spar_x: float = DEFAULT_SPAR_X,
     n_panels: int = N_PANELS,
@@ -297,6 +298,7 @@ def build_case_arrays(
         "residual_max": residual_max,
         "cl_std": cl_std,
         "cd_std": cd_std,
+        "unsteady": unsteady or {},
         # The panel backend attaches its viscous state here; a RANS row has no
         # equivalent scalar model, and downstream code treats it as optional.
         "state": None,

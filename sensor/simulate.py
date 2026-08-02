@@ -201,6 +201,9 @@ def pack_npz(case: dict) -> dict:
         "residual_max": case.get("residual_max"),
         "cl_std": case.get("cl_std"),
         "cd_std": case.get("cd_std"),
+        # Present only on unsteady rows: shedding frequency, Strouhal numbers,
+        # fluctuation levels and how many cycles the average covers.
+        "unsteady": case.get("unsteady") or {},
         # Only the panel backend has a viscous-state model; a RANS row resolves
         # separation directly and has no equivalent scalars.
         "state": state.to_dict() if state is not None else {},

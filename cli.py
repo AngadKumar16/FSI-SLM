@@ -689,37 +689,176 @@ def sensor_cache(
     splits: str = "artifacts/cfd/splits.json",
     out_dir: str = "artifacts/sensor/cache",
     time_budget_s: Optional[float] = None,
+    spec: str = "v2",
 ) -> None:
-    """Flatten the generated .npz files into memmaps for fast training."""
-    from sensor.data import build_cache
+    """Flatten the generated .npz files into memmaps for fast training.
 
+    ``--spec`` selects the input channel contract: ``v2`` (default, 13 channels
+    including the inviscid physics prior), ``v2_noprior`` (10, for ablating what
+    the prior is worth) or ``v1`` (the original 4). Changing it rebuilds the
+    input arrays; the targets are untouched.
+    """
+    from sensor.data import build_cache
+    from sensor.sdf import SPECS
+
+    if spec not in SPECS:
+        raise SystemExit(f"unknown --spec {spec!r}; choose from {sorted(SPECS)}")
     print(json.dumps(build_cache(
         _resolve_path(manifest), _resolve_path(splits), _resolve_path(out_dir),
-        time_budget_s=time_budget_s,
+        time_budget_s=time_budget_s, spec=SPECS[spec],
     ), indent=2))
+
+
+def sensor_finalize(out_dir: str = "artifacts/cfd") -> None:
+    """Merge every chunk in ``rows/`` into the manifest and rewrite the splits.
+
+    Run this after a RANS or URANS sweep: the sweep drivers only append their
+    own chunk file. The merge prefers the highest fidelity available for each
+    (foil, angle).
+    """
+    from sensor.generate import finalize_manifest
+
+    print(json.dumps(finalize_manifest(_resolve_path(out_dir)), indent=2))
+
+
+def sensor_rans(
+    foils: str,
+    alphas: str = "-4,0,4,6,8",
+    out_dir: str = "artifacts/cfd",
+    reynolds: float = 5.0e5,
+    max_workers: int = 1,
+    keep_case: bool = False,
+) -> None:
+    """Steady RANS (simpleFoam) sweep. Use below stall only.
+
+    ``--foils`` is a comma-separated list of .dat paths. Above about 10 degrees
+    steady SIMPLE has no fixed point to converge to -- use ``sensor-urans``
+    there instead.
+    """
+    from sensor.cfd.dataset import build_dataset
+
+    paths = [_resolve_path(p.strip()) for p in foils.split(",") if p.strip()]
+    a = [float(x) for x in alphas.split(",") if x.strip()]
+    print(json.dumps(build_dataset(
+        paths, a, _resolve_path(out_dir), reynolds=reynolds,
+        max_workers=max_workers, keep_case=keep_case,
+    ), indent=2))
+
+
+def sensor_urans(
+    foils: str,
+    alphas: str = "12,16,20",
+    out_dir: str = "artifacts/cfd",
+    reynolds: float = 5.0e5,
+    t_end: float = 80.0,
+    t_start_average: float = 20.0,
+    max_workers: int = 1,
+    keep_case: bool = False,
+) -> None:
+    """Unsteady RANS (pimpleFoam) sweep: time-averaged fields + shedding frequency.
+
+    This is the branch that works past stall. Times are in convective times
+    (chord / freestream), so the defaults leave roughly ten shedding cycles in
+    the averaging window. Each case reports whether its statistics actually
+    settled; that flag, not the exit code, is what ``--converged-only`` reads.
+    """
+    from sensor.cfd.unsteady import UnsteadyParams, build_unsteady_dataset
+
+    paths = [_resolve_path(p.strip()) for p in foils.split(",") if p.strip()]
+    a = [float(x) for x in alphas.split(",") if x.strip()]
+    up = UnsteadyParams(
+        reynolds=reynolds, t_end=t_end, t_start_average=t_start_average
+    )
+    print(json.dumps(build_unsteady_dataset(
+        paths, a, _resolve_path(out_dir), up=up,
+        max_workers=max_workers, keep_case=keep_case,
+    ), indent=2))
+
+
+def sensor_multifidelity(
+    out_dir: str = "artifacts/cfd",
+    n_foils: int = 4,
+    seed: int = 0,
+    run: bool = False,
+    max_workers: int = 1,
+) -> None:
+    """Plan (and optionally run) high-fidelity coverage of *training* foils.
+
+    The RANS cases in the dataset so far are all on NACA 0009, which is pinned
+    to the test split, so using them for training would be training on test.
+    This picks train-split foils instead -- one per series, seeded -- and solves
+    each below stall with steady RANS and above stall with URANS.
+
+    Without ``--run`` it only prints the plan, which is the cheap way to see how
+    much compute you are about to spend.
+    """
+    from sensor.cfd.dataset import build_dataset, plan_multifidelity_sweep
+
+    out = _resolve_path(out_dir)
+    plan = plan_multifidelity_sweep(
+        f"{out}/splits.json", f"{out}/manifest.jsonl", n_foils=n_foils, seed=seed
+    )
+    if not run:
+        plan["hint"] = "re-run with --run to execute (hours of CFD)"
+        print(json.dumps(plan, indent=2))
+        return
+
+    from sensor.cfd.unsteady import build_unsteady_dataset
+
+    steady = build_dataset(
+        plan["dats"], plan["steady"]["alphas"], out, max_workers=max_workers
+    )
+    unsteady = build_unsteady_dataset(
+        plan["dats"], plan["unsteady"]["alphas"], out, max_workers=max_workers
+    )
+    print(json.dumps({
+        "plan": plan, "steady": steady, "unsteady": unsteady,
+        "next": [
+            "python cli.py sensor-finalize",
+            "python cli.py sensor-cache",
+            "python cli.py sensor-train --fidelity-weights 'panel=1,rans=8,urans=8'",
+        ],
+    }, indent=2))
 
 
 def sensor_train(
     cache_dir: str = "artifacts/sensor/cache",
     run_dir: str = "artifacts/sensor/run",
-    epochs: int = 60,
+    epochs: int = 80,
     batch_size: int = 16,
     lr: float = 2e-3,
-    base: int = 24,
+    base: int = 32,
     depth: int = 4,
     downsample: int = 1,
     device: str = "auto",
     time_budget_s: Optional[float] = None,
     resume: bool = True,
+    augment: bool = True,
+    fidelity_weights: Optional[str] = None,
+    init_from: Optional[str] = None,
+    ema_decay: float = 0.999,
 ) -> None:
-    """Train the U-Net surrogate (fields + force coefficients)."""
+    """Train the U-Net surrogate (fields + force coefficients).
+
+    ``--fidelity-weights "panel=1,rans=8,urans=8"`` up-weights the expensive
+    rows. ``--init-from artifacts/sensor/run/best.pt`` with a smaller ``--lr``
+    is the second stage of the two-stage recipe.
+    """
     from sensor.train import train as _train
 
+    weights = None
+    if fidelity_weights:
+        weights = {
+            k.strip(): float(v)
+            for k, v in (part.split("=") for part in fidelity_weights.split(","))
+        }
     print(json.dumps(_train(
         cache_dir=_resolve_path(cache_dir), run_dir=_resolve_path(run_dir),
         epochs=epochs, batch_size=batch_size, lr=lr, base=base, depth=depth,
         downsample=downsample, device=device, time_budget_s=time_budget_s,
-        resume=resume,
+        resume=resume, augment=augment, fidelity_weights=weights,
+        init_from=_resolve_path(init_from) if init_from else None,
+        ema_decay=ema_decay,
     ), indent=2))
 
 
@@ -731,21 +870,23 @@ def sensor_eval(
     out_path: str = "artifacts/sensor/eval_test.json",
     fidelity: Optional[str] = None,
     converged_only: bool = False,
+    tta: bool = True,
 ) -> None:
     """Score the surrogate on a held-out split (NACA 0009 is in the test set).
 
-    ``--fidelity panel`` or ``--fidelity rans`` scores one solver's rows only.
+    ``--fidelity panel``, ``rans`` or ``urans`` scores one solver's rows only.
     A mixed score is neither number: on panel rows the network is reproducing
-    its own training distribution, on RANS rows it is being checked against a
-    different solver. ``--converged-only`` further drops RANS cases whose
-    residuals never fell.
+    one distribution, on RANS rows another. ``--converged-only`` further drops
+    cases whose residuals never fell (steady) or whose statistics never settled
+    (unsteady). ``--tta false`` disables test-time mirror averaging, which is
+    the ablation for what that averaging is worth.
     """
     from sensor.predict import evaluate_split
 
     print(json.dumps(evaluate_split(
         _resolve_path(checkpoint), _resolve_path(cache_dir), split, device,
         out_path=_resolve_path(out_path), fidelity=fidelity,
-        converged_only=converged_only,
+        converged_only=converged_only, tta=tta,
     ), indent=2))
 
 
@@ -940,6 +1081,10 @@ def main() -> None:
         # --- surrogate ("sensor") pipeline ---
         "sensor-generate": sensor_generate,
         "sensor-cache": sensor_cache,
+        "sensor-finalize": sensor_finalize,
+        "sensor-rans": sensor_rans,
+        "sensor-urans": sensor_urans,
+        "sensor-multifidelity": sensor_multifidelity,
         "sensor-train": sensor_train,
         "sensor-eval": sensor_eval,
         "sensor-predict": sensor_predict,
@@ -965,6 +1110,10 @@ __all__ = [
     "demo",
     "sensor_generate",
     "sensor_cache",
+    "sensor_finalize",
+    "sensor_rans",
+    "sensor_urans",
+    "sensor_multifidelity",
     "sensor_train",
     "sensor_eval",
     "sensor_predict",
