@@ -206,6 +206,78 @@ def _wake_deficit(
     return np.where(downstream, d, 0.0)
 
 
+def _regularise_near_wall(
+    u: np.ndarray,
+    v: np.ndarray,
+    sdf: np.ndarray,
+    edge: np.ndarray,
+    solver: "PanelSolver",
+    cp_wall: np.ndarray,
+    fluid: np.ndarray,
+    delta: float,
+) -> None:
+    """Clip the panel singularity and paint a no-slip layer. In place.
+
+    Factored out because the *prior* raster (the inviscid field handed to the
+    network as an input channel) needs exactly the same treatment as the target
+    raster. Without it the first pixel off the wall sits on the source/vortex
+    singularity and reports ``|V| ~ 2.5``, and a physics prior that is wrong
+    precisely at the surface -- where the load comes from -- is worse than none.
+    """
+    np.clip(u, -_VMAX, _VMAX, out=u)
+    np.clip(v, -_VMAX, _VMAX, out=v)
+    vt_wall = np.sign(solver._sol.vt) * np.sqrt(np.clip(1.0 - cp_wall, 0.0, None))
+    near = fluid & (sdf < delta)
+    if not np.any(near):
+        return
+    e = edge[near]
+    prof = np.clip(sdf[near] / delta, 0.0, 1.0) ** (1.0 / 7.0)
+    blend = 1.0 - np.clip(sdf[near] / delta, 0.0, 1.0) ** 2
+    u[near] = (1.0 - blend) * u[near] + blend * (vt_wall[e] * solver.tx[e] * prof)
+    v[near] = (1.0 - blend) * v[near] + blend * (vt_wall[e] * solver.ty[e] * prof)
+
+
+def potential_prior(
+    af: Airfoil,
+    alpha_deg: float,
+    grid: Optional[Grid] = None,
+    n_panels: int = N_PANELS,
+    sdf: Optional[np.ndarray] = None,
+    edge: Optional[np.ndarray] = None,
+) -> dict:
+    """Inviscid ``(u, v, p)`` raster for one case, standalone.
+
+    This is the physics prior the surrogate is conditioned on. It is the same
+    computation :func:`solve_case` performs internally, exposed separately for
+    the OpenFOAM path -- a RANS row has no panel solve of its own, but the
+    network still has to be given the same input channels, or panel-generated
+    and RANS-generated rows would not be interchangeable.
+    """
+    grid = grid or Grid()
+    af = close_trailing_edge(af)
+    xy = resample_polygon(rotate(af, alpha_deg).xy, n_panels)
+    solver = PanelSolver(xy)
+    solver.solve(0.0)
+    if sdf is None or edge is None:
+        sdf, edge = signed_distance_and_edge(solver.xy, grid)
+    xg, yg = grid.meshgrid()
+    (u, v), = solver.velocity_multi(xg, yg, (1.0,))
+    fluid = sdf > 0.0
+    _regularise_near_wall(
+        u, v, sdf, edge, solver, solver._sol.cp, fluid,
+        max(2.0 * grid.dx, 0.012),
+    )
+    p = 0.5 * (1.0 - (u * u + v * v))
+    np.clip(p, -0.5 * (_VMAX ** 2 - 1.0), 0.5, out=p)
+    return {
+        "u": np.where(fluid, u, 0.0).astype(np.float32),
+        "v": np.where(fluid, v, 0.0).astype(np.float32),
+        "p": np.where(fluid, p, 0.0).astype(np.float32),
+        "sdf": np.asarray(sdf, dtype=np.float32),
+        "cl": float(solver._sol.cl),
+    }
+
+
 def solve_case(
     af: Airfoil,
     alpha_deg: float,
@@ -239,36 +311,33 @@ def solve_case(
     sdf, edge = signed_distance_and_edge(solver.xy, grid)
     fluid = sdf > 0.0
 
-    u, v = solver.velocity(xg, yg, gamma_scale=state.gamma_scale)
-    # Bound the raw potential field *before* anything else. A pixel that lands
-    # within a panel length of the surface sees the 1/r singularity; |V| = 2
-    # is Cp = -3, already at the top of what a real suction peak reaches on
-    # these sections, so anything past it is numerical, not physical.
-    np.clip(u, -_VMAX, _VMAX, out=u)
-    np.clip(v, -_VMAX, _VMAX, out=v)
+    # One influence pass, two circulation scalings: the inviscid field (the
+    # physics prior the network is given) and the circulation-corrected field
+    # the viscous model builds the target from. Evaluating them separately
+    # doubled the most expensive part of a case for no reason.
+    (u_pot, v_pot), (u, v) = solver.velocity_multi(
+        xg, yg, (1.0, state.gamma_scale)
+    )
 
     # --- near-wall layer ----------------------------------------------------
-    # A potential-flow field evaluated a fraction of a panel length from the
-    # surface sits on top of the source/vortex singularity and blows up: without
-    # this the first pixel off the wall reports |V| ~ 2.5 and Cp ~ -7. Inside a
-    # band of a couple of cells the field is replaced by the panel's own surface
-    # tangential velocity carrying a 1/7-power turbulent profile, which both
-    # removes the singularity and gives the network a resolved no-slip layer.
-    # The band width is set by the raster, not by Re: at 42 px/chord a real
-    # Re = 5e5 boundary layer is thinner than one cell, so this is the finest
-    # wall structure the target grid can represent, and it is stated as such.
+    # Bound the raw potential field, then paint a no-slip layer. A pixel that
+    # lands within a panel length of the surface sees the 1/r singularity;
+    # |V| = 2 is Cp = -3, already at the top of what a real suction peak reaches
+    # on these sections, so anything past it is numerical, not physical. Inside
+    # a band of a couple of cells the field is replaced by the panel's own
+    # surface tangential velocity carrying a 1/7-power turbulent profile, which
+    # both removes the singularity and gives the network a resolved no-slip
+    # layer. The band width is set by the raster, not by Re: at 42 px/chord a
+    # real Re = 5e5 boundary layer is thinner than one cell, so this is the
+    # finest wall structure the target grid can represent.
     delta = max(2.0 * grid.dx, 0.012)
     cp_wall = surf_cp = solver._sol.cp * state.gamma_scale + (1.0 - state.gamma_scale) * (-0.2)
-    vt_wall = np.sign(solver._sol.vt) * np.sqrt(np.clip(1.0 - cp_wall, 0.0, None))
-    near = fluid & (sdf < delta)
-    if np.any(near):
-        e = edge[near]
-        prof = np.clip(sdf[near] / delta, 0.0, 1.0) ** (1.0 / 7.0)
-        blend = 1.0 - np.clip(sdf[near] / delta, 0.0, 1.0) ** 2
-        u_w = vt_wall[e] * solver.tx[e] * prof
-        v_w = vt_wall[e] * solver.ty[e] * prof
-        u[near] = (1.0 - blend) * u[near] + blend * u_w
-        v[near] = (1.0 - blend) * v[near] + blend * v_w
+    _regularise_near_wall(u, v, sdf, edge, solver, cp_wall, fluid, delta)
+    _regularise_near_wall(
+        u_pot, v_pot, sdf, edge, solver, solver._sol.cp, fluid, delta
+    )
+    p_pot = 0.5 * (1.0 - (u_pot * u_pot + v_pot * v_pot))
+    np.clip(p_pot, -0.5 * (_VMAX ** 2 - 1.0), 0.5, out=p_pot)
 
     # --- separated region: blend toward weak reverse flow -------------------
     w_sep = _separated_weight(xg, yg, xy, state, t_floor=2.5 * grid.dy)
@@ -304,6 +373,10 @@ def solve_case(
         "u": u,
         "v": v,
         "p": p,
+        # Inviscid prior on the same raster: input channels, not targets.
+        "u_pot": np.where(fluid, u_pot, 0.0).astype(np.float32),
+        "v_pot": np.where(fluid, v_pot, 0.0).astype(np.float32),
+        "p_pot": np.where(fluid, p_pot, 0.0).astype(np.float32),
         "sdf": sdf.astype(np.float32),
         "fluid_mask": fluid.astype(np.float32),
         "solid_mask": (~fluid).astype(np.float32),
