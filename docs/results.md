@@ -3,9 +3,19 @@
 Everything here is reproduced from artefacts in this repository. Commands to
 regenerate each number are at the bottom.
 
+> **Sections 3 and 5 are from the previous network and are stale.** The
+> surrogate was rewritten — 13-channel input with an inviscid physics prior,
+> FiLM conditioning, wall-weighted scalar pooling, bilinear decoding,
+> bottleneck attention, gradient + divergence + circulation losses, exact
+> mirror augmentation and test-time averaging, EMA weights. The old checkpoint
+> does not load into the new architecture and `SurrogatePredictor` refuses it
+> by name rather than failing obscurely. Re-run the two commands in §8 to
+> regenerate these tables; sections 1, 2, 4, 6 and 7 are unaffected because they
+> describe the solvers and the dataset, not the network.
+
 - Dataset: `artifacts/cfd/manifest.jsonl` — 1,928 cases
-- Checkpoint: `artifacts/sensor/run/best.pt` — 2.27 M parameters, epoch 58
-- Scores: `artifacts/sensor/eval_test_panel.json`, `artifacts/sensor/eval_test_rans.json`
+- Checkpoint: `artifacts/sensor/run/best.pt` — **stale**, 2.27 M parameters, epoch 58
+- Scores: `artifacts/sensor/eval_test_panel.json`, `artifacts/sensor/eval_test_rans.json` — **stale**
 - Figures: `poster/generated/fig_rans_validation.png`, `fig_fidelity_transfer.png`
 
 ---
@@ -58,7 +68,7 @@ error, not solver error — and systematic, which is what matters for a target.
 
 ---
 
-## 3. U-Net, held-out sections
+## 3. U-Net, held-out sections  *(stale — previous architecture)*
 
 306 cases across 17 unseen shapes, scored against the panel targets it was
 trained on. 64 × 64 configuration, 60 epochs.
@@ -119,7 +129,7 @@ Converged branch against published NACA 0009:
 
 ---
 
-## 5. Cross-fidelity transfer
+## 5. Cross-fidelity transfer  *(stale — previous architecture, panel-only training)*
 
 One network, trained on panel targets only, scored against each solver on the
 held-out section. A mixed score is neither quantity, so they are reported apart.
@@ -187,39 +197,70 @@ momentum-integral theorem.
 - **No PIV.** The rig is not connected. `Data/schema.py` defines the contract and
   `sensor/bridge.py` fills it from the surrogate; every record self-labels
   `provenance.signals = "synthesised by a 1-DOF instrument model, not measured"`.
-- **No RANS in training.** The only RANS cases are on NACA 0009, which is in the
-  test split. Multi-fidelity training is wired and tested
-  (`--fidelity-weights "panel=1,rans=10"`) but using it would be training on
-  test. Needs RANS on train-split foils: 4 foils × 7 angles at α ≤ 8° where it
-  converges, ≈45 min on 4 workers.
+- **No high-fidelity rows in training yet.** The mechanism is now three-part —
+  a fidelity *conditioning channel*, per-fidelity loss weights, and two-stage
+  fine-tuning — and `sensor-multifidelity` picks train-split foils and solves
+  them. But it has not been *run*: the only RANS cases in the dataset are still
+  on NACA 0009, which is in the test split. Until it is run, asking a checkpoint
+  for `fidelity="rans"` returns an extrapolation warning, by design.
 - **Structural coupling is one-way and static.** Pressure drives deflection;
   deflection does not feed back.
-- **Post-stall RANS is unusable** with a steady solver. Needs `pimpleFoam` with
-  time-averaging.
+- **URANS is written but not run.** `sensor/cfd/unsteady.py` and its analysis
+  are tested end-to-end on synthetic records and on the OpenFOAM output format
+  (`tests/test_unsteady.py`, 10 tests), but no transient case has been solved
+  yet. Every post-stall number in this document is still from the steady solver
+  and is still unusable.
 
 ---
 
 ## 8. Reproducing
 
+The network was rewritten; §3 and §5 need regenerating from scratch. The cache
+must be rebuilt first — the input tensor went from 4 channels to 13, and
+`sensor-cache` detects the mismatch and rebuilds rather than serving arrays of
+the wrong width.
+
 ```bash
 python cli.py sensor-generate
-python cli.py sensor-cache
-python cli.py sensor-train --downsample 2 --base 16 --epochs 60
+python cli.py sensor-cache                                   # ~13 min, 13 channels
+python cli.py sensor-train --epochs 80 --batch-size 16       # full 128x128
 python cli.py sensor-eval --split test --fidelity panel --out-path artifacts/sensor/eval_test_panel.json
+python cli.py sensor-eval --split test --fidelity panel --tta=False   # TTA ablation
 python -m sensor.figures --out poster/generated
 python -m pytest tests/ -q
+```
+
+Two ablations worth reporting alongside the headline numbers, because each
+isolates one of the changes:
+
+```bash
+python cli.py sensor-cache --spec v2_noprior --out-dir artifacts/sensor/cache_np
+python cli.py sensor-train --cache-dir artifacts/sensor/cache_np --run-dir artifacts/sensor/run_np
+python cli.py sensor-train --run-dir artifacts/sensor/run_noaug --augment=False
 ```
 
 RANS set (needs OpenFOAM v2606 + gmsh; ≈3 h on an M4 Pro, most of it the eight
 post-stall cases that never converge):
 
 ```bash
-python -c "from sensor.cfd.dataset import build_dataset; print(build_dataset(['Data/Airfoils/4/n0009sm.dat.txt'], out_dir='artifacts/cfd', max_workers=4))"
-python -c "from sensor.generate import finalize_manifest; finalize_manifest('artifacts/cfd')"
+python cli.py sensor-rans --foils Data/Airfoils/4/n0009sm.dat.txt --alphas="-8,-4,0,2,4,6,8" --max-workers 4
+python cli.py sensor-finalize
 python cli.py sensor-cache
 python cli.py sensor-eval --split test --fidelity rans --converged-only --out-path artifacts/sensor/eval_test_rans.json
 ```
 
+High-fidelity rows on *training* foils, plus URANS past stall — this is the run
+that makes multi-fidelity training legitimate:
+
+```bash
+python cli.py sensor-multifidelity                     # print the plan first
+python cli.py sensor-multifidelity --run --max-workers 4
+python cli.py sensor-finalize && python cli.py sensor-cache
+python cli.py sensor-train --lr 2e-4 --init-from artifacts/sensor/run/best.pt \
+    --run-dir artifacts/sensor/run_mf --fidelity-weights "panel=1,rans=8,urans=8"
+```
+
 Interactive zsh does not treat `#` as a comment, so a trailing note on these
 commands arrives as positional arguments. `cli.py` detects and rejects that
-rather than binding it to a parameter.
+rather than binding it to a parameter. Note also the `--alphas="-8,..."` form
+above: a bare leading minus is parsed as a flag.

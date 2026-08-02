@@ -306,7 +306,17 @@ def compute_norm_stats(cache: SensorCache, split: str = "train") -> dict:
     idx = cache.indices(split)
     if idx.size == 0:
         raise ValueError(f"split '{split}' is empty -- build the cache first")
-    sample = idx if idx.size <= 400 else np.random.default_rng(0).choice(idx, 400, False)
+    # The sample is held to a fixed *memory* budget rather than a fixed case
+    # count. Four hundred cases was 105 MB of float32 at four input channels and
+    # is 340 MB at thirteen, all of it live at once because the statistics are
+    # taken over the stacked array; scaling the count keeps the working set flat
+    # as the channel contract grows.
+    n_ch = cache.inputs.shape[1]
+    budget = max(64, int(400 * 4 / max(n_ch, 1)))
+    sample = (
+        idx if idx.size <= budget
+        else np.random.default_rng(0).choice(idx, budget, False)
+    )
 
     x = np.asarray(cache.inputs[np.sort(sample)], dtype=np.float32)
     y = np.asarray(cache.targets[np.sort(sample)], dtype=np.float32)
@@ -407,7 +417,11 @@ def make_torch_dataset(
             x = torch.from_numpy(np.asarray(cache.inputs[j], dtype=np.float32))
             y = torch.from_numpy(np.asarray(cache.targets[j], dtype=np.float32))
             m = torch.from_numpy(np.asarray(cache.masks[j], dtype=np.float32))
-            s = torch.from_numpy(np.asarray(cache.scalars[j], dtype=np.float32))
+            # Copied explicitly: the other three arrays change dtype on the way
+            # out of the memmap and so are copies already, but the scalars are
+            # stored float32 and ``asarray`` would hand torch a read-only view
+            # of the mapping.
+            s = torch.from_numpy(np.array(cache.scalars[j], dtype=np.float32))
             x = (x - x_mean) / x_std
             y = (y - y_mean) / y_std
             s = (s - s_mean) / s_std

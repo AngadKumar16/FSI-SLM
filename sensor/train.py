@@ -278,6 +278,10 @@ def train(
         else:
             print("checkpoint config differs -- starting fresh", flush=True)
 
+    # Allocated once. Rebuilding an 11 M-parameter module every epoch just to
+    # hold the averaged weights churns memory for no reason.
+    ema_model = UNet(cfg).to(dev) if ema is not None else None
+
     t0 = time.time()
     stopped_early = False
     for epoch in range(start_epoch, epochs):
@@ -323,8 +327,8 @@ def train(
         # and picking "best" on it selects for lucky steps.
         eval_model = model
         if ema is not None:
-            eval_model = UNet(cfg).to(dev)
-            ema.copy_to(eval_model)
+            ema.copy_to(ema_model)
+            eval_model = ema_model
         val_metrics = evaluate(eval_model, val_dl, dev, trainer, downsample)
         history.append({
             "epoch": epoch, "train": train_metrics, "val": val_metrics,

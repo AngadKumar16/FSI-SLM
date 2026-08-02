@@ -174,16 +174,35 @@ def fig_dataset(out: Path, manifest: str = "artifacts/cfd/manifest.jsonl"):
     plt.close(fig)
 
 
-def fig_surrogate_accuracy(out: Path, checkpoint: str = "artifacts/sensor/run/best.pt"):
+def fig_surrogate_accuracy(
+    out: Path,
+    checkpoint: str = "artifacts/sensor/run/best.pt",
+    cache_dir: str = "artifacts/sensor/cache",
+):
     """Predicted vs true coefficients on the held-out foils, and a field triple."""
     if not Path(checkpoint).exists():
         return
-    from .predict import SurrogatePredictor, _avg_pool_np
+    from .predict import LegacyCheckpointError, SurrogatePredictor, _avg_pool_np
     from .data import SensorCache
     import torch
 
-    p = SurrogatePredictor(checkpoint)
-    cache = SensorCache("artifacts/sensor/cache")
+    try:
+        p = SurrogatePredictor(checkpoint)
+    except LegacyCheckpointError as exc:
+        print(f"skipping fig_surrogate_accuracy: {exc}")
+        return
+    cache = SensorCache(cache_dir)
+    # The cache stores the input tensor, so a cache built under a different
+    # channel contract than the checkpoint expects is a silent broadcast error
+    # nine lines down. Say so instead.
+    if cache.spec.names != p.spec.names:
+        print(
+            f"skipping fig_surrogate_accuracy: cache is {cache.spec.name} "
+            f"({cache.spec.n_channels} channels), checkpoint expects "
+            f"{p.spec.name} ({p.spec.n_channels}). Rebuild with "
+            f"`python cli.py sensor-cache`."
+        )
+        return
     idx = cache.indices("test")
     if idx.size == 0:
         return
@@ -196,8 +215,10 @@ def fig_surrogate_accuracy(out: Path, checkpoint: str = "artifacts/sensor/run/be
         t = torch.from_numpy(((xi - x_mean) / x_std).astype(np.float32))[None]
         if p.downsample > 1:
             t = torch.nn.functional.avg_pool2d(t, p.downsample)
-        with torch.no_grad():
-            _, sp = p.model(t.to(p.device))
+        # Through the predictor's own forward, so the figure shows the model as
+        # released -- with test-time mirror averaging -- rather than a variant
+        # of it that only this file uses.
+        _, sp = p._forward(t.to(p.device))
         sp = sp[0].cpu().numpy()
         sp = sp * np.asarray(p.stats["s_std"], np.float32) + np.asarray(
             p.stats["s_mean"], np.float32)
@@ -393,6 +414,72 @@ def fig_fidelity_transfer(
     plt.close(fig)
 
 
+def fig_urans_shedding(out: Path, manifest: str = "artifacts/cfd/manifest.jsonl"):
+    """What the unsteady runs bought: a measured shedding frequency past stall.
+
+    Left: mean lift with the RMS fluctuation as an error bar, against the steady
+    branch. Right: the projected-height Strouhal number, which is the number the
+    bluff-body literature quotes and which should sit near 0.2 if the wake is
+    really shedding a von Karman street. Cases whose statistics did not settle
+    are drawn hollow rather than dropped -- how many of them there are is part of
+    the result.
+    """
+    path = Path(manifest)
+    if not path.exists():
+        return
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    urans = sorted(
+        (r for r in rows if r.get("fidelity") == "urans" and r.get("ok")),
+        key=lambda r: r["alpha_deg"],
+    )
+    if not urans:
+        return
+    steady = sorted(
+        (r for r in rows if r.get("fidelity") == "rans" and r.get("ok")
+         and r.get("converged")),
+        key=lambda r: r["alpha_deg"],
+    )
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
+    a = np.array([r["alpha_deg"] for r in urans])
+    cl = np.array([r["cl"] for r in urans], dtype=float)
+    rms = np.array([r.get("cl_std") or 0.0 for r in urans], dtype=float)
+    ok = np.array([bool(r.get("converged")) for r in urans])
+
+    ax1.errorbar(a[ok], cl[ok], yerr=rms[ok], fmt="o", color="#C44E52", capsize=3,
+                 label="URANS, statistics settled")
+    if (~ok).any():
+        ax1.errorbar(a[~ok], cl[~ok], yerr=rms[~ok], fmt="o", mfc="none",
+                     color="#C44E52", capsize=3, label="URANS, not settled")
+    if steady:
+        ax1.plot([r["alpha_deg"] for r in steady], [r["cl"] for r in steady],
+                 "s-", color="#4C72B0", label="steady RANS, converged")
+    ax1.set_xlabel(r"$\alpha$ [deg]")
+    ax1.set_ylabel(r"$C_l$")
+    ax1.set_title("mean lift, error bar = RMS fluctuation", fontsize=9)
+    ax1.legend(fontsize=8)
+    ax1.grid(alpha=0.3)
+
+    st = np.array([r.get("strouhal_projected") or np.nan for r in urans], dtype=float)
+    ax2.plot(a[ok], st[ok], "o", color="#C44E52")
+    if (~ok).any():
+        ax2.plot(a[~ok], st[~ok], "o", mfc="none", color="#C44E52")
+    ax2.axhspan(0.15, 0.25, color="grey", alpha=0.2,
+                label="bluff-body band, St $\\approx$ 0.2")
+    ax2.set_xlabel(r"$\alpha$ [deg]")
+    ax2.set_ylabel(r"$St_d = f\,d/U$,   $d = c(\sin|\alpha| + t/c)$")
+    ax2.set_title("measured shedding, projected height", fontsize=9)
+    ax2.legend(fontsize=8)
+    ax2.grid(alpha=0.3)
+
+    fig.suptitle(
+        "Unsteady RANS past stall: the steady solver has no fixed point here, "
+        "and only the unsteady run measures a frequency", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out / "fig_urans_shedding.png", dpi=160)
+    plt.close(fig)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="poster/generated")
@@ -402,7 +489,7 @@ def main() -> None:
 
     for fn in (fig_fields, fig_separation_series, fig_polar, fig_dataset,
                fig_surrogate_accuracy, fig_training_curve,
-               fig_rans_validation, fig_fidelity_transfer):
+               fig_rans_validation, fig_fidelity_transfer, fig_urans_shedding):
         try:
             fn(out)
             print(f"  {fn.__name__} ok", flush=True)

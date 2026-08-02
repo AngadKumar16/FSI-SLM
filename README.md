@@ -14,6 +14,15 @@ fields into a time-resolved `FeatureRecord` screened for instrumentation faults.
 Together they close the loop from "NACA 0009 at 12 degrees" to an interpreted
 experiment with no human step.
 
+The surrogate is conditioned on an **inviscid physics prior** — the panel
+solution on the same raster is an input channel, so the network learns the
+viscous correction rather than the whole field — and on a **fidelity code**, so
+one network can be asked for the panel, steady-RANS or URANS answer. Three
+solvers write the same contract: a panel method everywhere, steady RANS below
+stall, and unsteady RANS above it, where a steady solver has no fixed point to
+converge to and the transient run also *measures* the vortex-shedding frequency
+the lock-in classification depends on.
+
 ```bash
 python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12 --interpret
 ```
@@ -83,9 +92,13 @@ For a detailed end-to-end workflow diagram see:
 | **Config** | YAML-based configuration with sensible defaults | `configs/default.yaml` |
 | **Noise Detection** | Eleven instrumentation-fault detectors (PIV dropout and spurious vectors, ADC clipping and quantisation, spikes, drift, flatline, spectral SNR, aliasing, mains pickup) | `features/noise.py` |
 | **Flow Solver** | Hess-Smith panel method + Beddoes-Leishman static stall + momentum-consistent wake | `sensor/flow/` |
+| **Steady RANS** | gmsh + OpenFOAM `simpleFoam`, k-omega SST. Converges below stall | `sensor/cfd/` |
+| **Unsteady RANS** | `pimpleFoam` + time-averaging + measured shedding frequency. The post-stall branch | `sensor/cfd/unsteady.py` |
 | **Structural Solver** | Chordwise Euler-Bernoulli beam (load and displacement fields) + spanwise modal model | `sensor/structure/` |
 | **Dataset Generator** | 107 sections x 18 angles = 1,926 cases, foil-disjoint splits | `sensor/generate.py` |
-| **U-Net Surrogate** | Five field channels + five scalars from geometry and flow condition | `sensor/model.py`, `sensor/train.py` |
+| **Input Contract** | Named, versioned channel set with mirror parities; inviscid prior + fidelity conditioning | `sensor/sdf.py` |
+| **U-Net Surrogate** | Five field channels + five scalars; FiLM conditioning, bottleneck attention, physics-informed loss | `sensor/model.py`, `sensor/train.py` |
+| **Symmetry** | Exact y-mirror as augmentation and test-time averaging, validated against the solver | `sensor/symmetry.py` |
 | **Twin Bridge** | Steady surrogate fields -> time-resolved `FeatureRecord` + data-quality report | `sensor/bridge.py` |
 
 ---
@@ -267,7 +280,11 @@ python cli.py <command> [options]
 | `mcp` | Start the MCP server (stdio) for Claude Desktop/Code |
 | `demo` | Instant end-to-end terminal demo (no model): generate → extract → interpret → validate all 5 regimes; `--sweep` adds a U* regime map |
 | `sensor-generate` | Solve the 107 × 18 = 1,926-case surrogate training set |
-| `sensor-cache` | Flatten the generated `.npz` files into training memmaps |
+| `sensor-cache` | Flatten the generated `.npz` files into training memmaps (`--spec` picks the channel contract) |
+| `sensor-rans` | Steady OpenFOAM sweep. Below stall only |
+| `sensor-urans` | Unsteady OpenFOAM sweep: time-averaged fields + measured shedding frequency |
+| `sensor-multifidelity` | Plan (and `--run`) high-fidelity coverage of *training* foils |
+| `sensor-finalize` | Merge sweep chunks into the manifest, highest fidelity wins |
 | `sensor-train` | Train the U-Net (fields + force coefficients) |
 | `sensor-eval` | Score the surrogate on held-out sections |
 | `sensor-predict` | Coefficients (and fields) for one section and incidence |
@@ -279,17 +296,31 @@ Each command accepts `--config-path` to specify a custom YAML configuration file
 
 ```bash
 python cli.py sensor-generate                  # 1,926 cases, ~2 min on 4 cores
-python cli.py sensor-cache                     # memmap cache, ~20 s
-python cli.py sensor-train --epochs 60 --batch-size 16          # 128x128
+python cli.py sensor-cache                     # 13-channel memmap cache
+python cli.py sensor-train --epochs 80 --batch-size 16          # 128x128
 python cli.py sensor-train --downsample 2 --base 16 --epochs 60 # fast 64x64
 python cli.py sensor-eval --split test
 python cli.py sensor-predict --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12
 python -m sensor.figures --out poster/generated
 ```
 
-Held-out results (306 cases across 17 unseen sections, NACA 0009 among them):
-`Cl` R² = 0.996, `Cd` R² = 0.996, `Cm` R² = 0.986, peak deflection R² = 0.90;
-relative field RMSE 0.025 (`u`), 0.16 (`v`), 0.17 (`p`), 0.04 (`load`).
+Adding high fidelity — steady RANS below stall, unsteady above it, on foils the
+network is allowed to see:
+
+```bash
+python cli.py sensor-multifidelity                  # print the plan first
+python cli.py sensor-multifidelity --run --max-workers 4
+python cli.py sensor-finalize && python cli.py sensor-cache
+python cli.py sensor-train --lr 2e-4 --init-from artifacts/sensor/run/best.pt \
+    --fidelity-weights "panel=1,rans=8,urans=8"
+```
+
+> The numbers previously quoted here — `Cl` R² = 0.996, relative field RMSE
+> 0.025 (`u`), 0.16 (`v`), 0.17 (`p`) — were measured on the *previous*
+> architecture and are stale. The network was rewritten and the old checkpoint
+> does not load into it; `SurrogatePredictor` refuses it by name and tells you
+> to retrain. See [docs/results.md](docs/results.md) §8 for the commands that
+> regenerate every table.
 
 ### The full twin
 
