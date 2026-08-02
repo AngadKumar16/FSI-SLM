@@ -237,6 +237,27 @@ def _regularise_near_wall(
     v[near] = (1.0 - blend) * v[near] + blend * (vt_wall[e] * solver.ty[e] * prof)
 
 
+def _bound_prior(u: np.ndarray, v: np.ndarray) -> None:
+    """Clip the prior to the same envelope the targets live in. In place.
+
+    :func:`_regularise_near_wall` clips the raw potential field first, then
+    *overwrites* the wall band with the panel's own surface tangential velocity,
+    ``sqrt(1 - Cp)``. That second step is not bounded by the first, and it does
+    not need to be for the target path: :func:`solve_case` clips again at the
+    end, after the separation and wake terms.
+
+    The prior has no such second clip, and inviscid flow does not stall, so the
+    leading-edge suction peak keeps growing with incidence -- measured over the
+    107-section sweep it reaches ``|u| = 5.25`` on NACA 63-010 at -8 degrees,
+    against a target that never exceeds 2. Handing the network an input channel
+    two and a half times outside the range of the quantity it is meant to
+    predict is worse than useless: the normalisation statistics end up set by a
+    handful of leading-edge pixels.
+    """
+    np.clip(u, -_VMAX, _VMAX, out=u)
+    np.clip(v, -_VMAX, _VMAX, out=v)
+
+
 def potential_prior(
     af: Airfoil,
     alpha_deg: float,
@@ -267,6 +288,7 @@ def potential_prior(
         u, v, sdf, edge, solver, solver._sol.cp, fluid,
         max(2.0 * grid.dx, 0.012),
     )
+    _bound_prior(u, v)
     p = 0.5 * (1.0 - (u * u + v * v))
     np.clip(p, -0.5 * (_VMAX ** 2 - 1.0), 0.5, out=p)
     return {
@@ -336,6 +358,10 @@ def solve_case(
     _regularise_near_wall(
         u_pot, v_pot, sdf, edge, solver, solver._sol.cp, fluid, delta
     )
+    # The target path clips again below, after the separation and wake terms.
+    # The prior has no such second pass, so it is bounded here -- see
+    # _bound_prior for what happens if it is not.
+    _bound_prior(u_pot, v_pot)
     p_pot = 0.5 * (1.0 - (u_pot * u_pot + v_pot * v_pot))
     np.clip(p_pot, -0.5 * (_VMAX ** 2 - 1.0), 0.5, out=p_pot)
 

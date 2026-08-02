@@ -231,6 +231,19 @@ def train(
     if len(counts) > 1 or fidelity_weights:
         print(f"fidelity mix: {counts}  weights: {fidelity_weights or 'uniform'}",
               flush=True)
+    if num_workers:
+        # The dataset is a closure over the memmap cache and the normalisation
+        # tensors, defined inside `make_torch_dataset`. macOS starts worker
+        # processes with `spawn`, which pickles the dataset by reference, and a
+        # class defined inside a function has no importable path -- the loader
+        # dies with "Can't pickle local object". It would not buy much anyway:
+        # a batch is a page-cache read and a normalisation, and the GPU is the
+        # bottleneck.
+        raise ValueError(
+            "num_workers must be 0. The cache dataset is a local class and "
+            "cannot be pickled for spawned workers; loading is page-cache reads "
+            "and is not the bottleneck."
+        )
     train_dl = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True, drop_last=True,
         num_workers=num_workers,

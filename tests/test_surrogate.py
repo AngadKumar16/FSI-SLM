@@ -89,6 +89,34 @@ def test_fields_are_bounded(case):
     assert p.min() >= -1.5 - 1e-6
 
 
+@pytest.mark.parametrize("alpha", [-8.0, 0.0, 12.0, 20.0])
+def test_prior_lives_in_the_same_envelope_as_the_target(prep, alpha):
+    """The prior input channels must not exceed the range of what they predict.
+
+    Inviscid flow does not stall, so the leading-edge suction peak grows without
+    limit with incidence while the target saturates. The near-wall band is
+    painted with the panel's own ``sqrt(1 - Cp)`` *after* the raw field is
+    clipped, so without a second bound the prior reached ``|u| = 5.25`` on
+    NACA 63-010 at -8 degrees against a target that never passes 2 -- and the
+    normalisation statistics would then be set by a handful of leading-edge
+    pixels. Checked at both extremes of the sweep, where the gap is widest.
+    """
+    from sensor.flow.solve import potential_prior
+    from sensor.sdf import DEFAULT_SPEC, build_input
+
+    grid = Grid()
+    prior = potential_prior(prep.airfoil, alpha, grid)
+    assert np.abs(prior["u"]).max() <= 2.0 + 1e-6
+    assert np.abs(prior["v"]).max() <= 2.0 + 1e-6
+    assert prior["p"].min() >= -1.5 - 1e-6
+
+    x = build_input(prep.airfoil, alpha, 5e5, grid, DEFAULT_SPEC,
+                    sdf=prior["sdf"], prior=prior)
+    assert np.isfinite(x).all()
+    for name in ("pot_u", "pot_v"):
+        assert np.abs(x[DEFAULT_SPEC.index(name)]).max() <= 2.0 + 1e-6
+
+
 def test_wake_momentum_equals_drag(prep):
     """The momentum-integral theorem, satisfied by construction -- so a failure
     means the wake model and the reported Cd have drifted apart."""

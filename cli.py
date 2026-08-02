@@ -847,6 +847,32 @@ def sensor_multifidelity(
     }, indent=2))
 
 
+def sensor_preflight(
+    cache_dir: str = "artifacts/sensor/cache",
+    epochs: int = 80,
+    batch_size: int = 16,
+    base: int = 32,
+    depth: int = 4,
+    downsample: int = 1,
+    device: str = "auto",
+    steps: int = 6,
+) -> None:
+    """Time a few real training steps and project the cost of the full run.
+
+    Run this before every long training job. It exercises the real model on the
+    real data at the real resolution, so a cache built under a different channel
+    contract, a batch that does not fit, an op the backend does not implement or
+    a device that silently fell back to CPU all surface in about a minute rather
+    than after an hour of wasted compute.
+    """
+    from sensor.preflight import preflight
+
+    print(json.dumps(preflight(
+        cache_dir=_resolve_path(cache_dir), epochs=epochs, batch_size=batch_size,
+        base=base, depth=depth, downsample=downsample, device=device, steps=steps,
+    ), indent=2))
+
+
 def sensor_train(
     cache_dir: str = "artifacts/sensor/cache",
     run_dir: str = "artifacts/sensor/run",
@@ -1113,6 +1139,7 @@ def main() -> None:
         "sensor-rans": sensor_rans,
         "sensor-urans": sensor_urans,
         "sensor-multifidelity": sensor_multifidelity,
+        "sensor-preflight": sensor_preflight,
         "sensor-train": sensor_train,
         "sensor-eval": sensor_eval,
         "sensor-predict": sensor_predict,
@@ -1142,6 +1169,7 @@ __all__ = [
     "sensor_rans",
     "sensor_urans",
     "sensor_multifidelity",
+    "sensor_preflight",
     "sensor_train",
     "sensor_eval",
     "sensor_predict",
