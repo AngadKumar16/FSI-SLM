@@ -26,7 +26,7 @@ and inviscid drag satisfies d'Alembert (``|Cd| < 1e-3``).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import List, Sequence, Tuple
 
 import numpy as np
 
@@ -262,24 +262,51 @@ class PanelSolver:
         changing displacement thickness to first order, so the viscous model
         uses this to make the far field consistent with the stalled ``Cl``.
         """
+        return self.velocity_multi(px, py, (gamma_scale,))[0]
+
+    def velocity_multi(
+        self,
+        px: np.ndarray,
+        py: np.ndarray,
+        gamma_scales: Sequence[float] = (1.0,),
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """Velocity at several circulation scalings, sharing one influence pass.
+
+        The field evaluation is entirely dominated by building the (M, N)
+        influence matrices; the solution itself enters only as two matrix-vector
+        products. Asking for the inviscid field (``gamma_scale = 1``) *and* the
+        circulation-corrected viscous field in two separate :meth:`velocity`
+        calls therefore costs twice what it should, and the dataset needs both:
+        the inviscid raster is the physics prior fed to the network, the scaled
+        one is the target.
+        """
         if self._sol is None:
             raise RuntimeError("call solve() first")
         sol = self._sol
+        scales = [float(g) for g in gamma_scales]
+        if not scales:
+            raise ValueError("gamma_scales is empty")
         shape = np.asarray(px).shape
         px = np.ravel(px)
         py = np.ravel(py)
-        u = np.empty(px.size)
-        v = np.empty(px.size)
-        g = sol.gamma * gamma_scale
+        us_out = [np.empty(px.size) for _ in scales]
+        vs_out = [np.empty(px.size) for _ in scales]
         for i in range(0, px.size, _CHUNK):
             sl = slice(i, min(i + _CHUNK, px.size))
             us, vs, uv, vv = self._influence(px[sl], py[sl])
-            u[sl] = us @ sol.sigma + g * uv.sum(axis=1)
-            v[sl] = vs @ sol.sigma + g * vv.sum(axis=1)
+            src_u = us @ sol.sigma
+            src_v = vs @ sol.sigma
+            vort_u = uv.sum(axis=1)
+            vort_v = vv.sum(axis=1)
+            for k, g in enumerate(scales):
+                us_out[k][sl] = src_u + sol.gamma * g * vort_u
+                vs_out[k][sl] = src_v + sol.gamma * g * vort_v
         a = np.deg2rad(sol.alpha_deg)
-        u += sol.uinf * np.cos(a)
-        v += sol.uinf * np.sin(a)
-        return u.reshape(shape), v.reshape(shape)
+        cos_a, sin_a = sol.uinf * np.cos(a), sol.uinf * np.sin(a)
+        return [
+            ((u + cos_a).reshape(shape), (v + sin_a).reshape(shape))
+            for u, v in zip(us_out, vs_out)
+        ]
 
     def surface(self) -> dict:
         """Control points, normals, panel lengths and Cp as plain arrays."""
