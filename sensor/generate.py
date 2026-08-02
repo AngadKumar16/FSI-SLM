@@ -73,7 +73,12 @@ def _series_of(path: Path) -> str:
 
 
 # Higher wins when the same (foil, alpha) exists at more than one fidelity.
-FIDELITY_RANK = {"panel": 0, "rans": 1}
+# URANS outranks steady RANS everywhere, but it earns that rank only past stall:
+# a steady solver does not reach a fixed point on massively separated flow, so a
+# converged steady case at 4 degrees and a time-averaged unsteady case at 4
+# degrees are the same answer, while at 16 degrees only one of them means
+# anything.
+FIDELITY_RANK = {"panel": 0, "rans": 1, "urans": 2}
 
 
 def _rank(row: dict) -> tuple:
@@ -119,6 +124,14 @@ def _row_from_meta(meta: dict) -> dict:
         "residual_max": meta.get("residual_max"),
         "cl_std": meta.get("cl_std"),
         "cd_std": meta.get("cd_std"),
+        # Unsteady rows carry the one quantity a steady solve cannot produce:
+        # the vortex-shedding frequency, measured rather than correlated. The
+        # twin bridge downstream would otherwise fall back on Fage-Johansen.
+        **{
+            k: (meta.get("unsteady") or {}).get(k)
+            for k in ("f_shed", "strouhal_chord", "strouhal_projected",
+                      "cl_rms", "cd_rms", "n_cycles", "statistically_steady")
+        },
     }
 
 

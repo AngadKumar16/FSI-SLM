@@ -43,7 +43,9 @@ def case(prep):
 
 
 def test_tensor_contract(case):
-    assert case["input"].shape == (4, GRID.ny, GRID.nx)
+    from sensor.sdf import DEFAULT_SPEC
+
+    assert case["input"].shape == (DEFAULT_SPEC.n_channels, GRID.ny, GRID.nx)
     assert case["target"].shape == (5, GRID.ny, GRID.nx)
     assert case["mask"].shape == (GRID.ny, GRID.nx)
     assert case["input"].dtype == np.float32
@@ -226,8 +228,10 @@ def test_unet_shapes_and_parameter_count():
     torch = pytest.importorskip("torch")
     from sensor.model import UNet, UNetConfig, masked_loss
 
-    model = UNet(UNetConfig(base=8, depth=3))
-    x = torch.randn(2, 4, 64, 64)
+    from sensor.sdf import DEFAULT_SPEC
+
+    model = UNet(UNetConfig.for_spec(DEFAULT_SPEC, base=8, depth=3))
+    x = torch.randn(2, DEFAULT_SPEC.n_channels, 64, 64)
     y, s = model(x)
     assert y.shape == (2, 5, 64, 64)
     assert s.shape == (2, 5)
@@ -288,10 +292,15 @@ def test_predictor_agrees_with_the_cached_evaluation_path():
     import torch
 
     from sensor.data import SensorCache
-    from sensor.predict import SurrogatePredictor
+    from sensor.predict import LegacyCheckpointError, SurrogatePredictor
 
-    p = SurrogatePredictor("artifacts/sensor/run/best.pt")
+    try:
+        p = SurrogatePredictor("artifacts/sensor/run/best.pt")
+    except LegacyCheckpointError as exc:
+        pytest.skip(f"checkpoint predates the current architecture: {exc}")
     cache = SensorCache("artifacts/sensor/cache")
+    if cache.spec.names != p.spec.names:
+        pytest.skip("cache and checkpoint use different input contracts")
     idx = cache.indices("test")
     if idx.size == 0:
         pytest.skip("empty test split")

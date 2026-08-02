@@ -10,13 +10,13 @@ Two interchangeable backends produce the *same* ``.npz`` contract
   binaries, minutes per case. Used to regenerate a validation subset (NACA 0009
   is held out for exactly this) and to fine-tune a panel-pretrained U-Net.
 
-Each dataset row carries a ``fidelity`` tag ("panel" | "rans") so the two can be
-mixed, weighted, or split at training time.
+Each dataset row carries a ``fidelity`` tag ("panel" | "rans" | "urans") so the
+three can be mixed, weighted, conditioned on, or split at training time.
 """
 
 from .panel import PanelSolver, PanelSolution  # noqa: F401
 from .viscous import ViscousModel, ViscousState  # noqa: F401
-from .solve import FlowCase, solve_case  # noqa: F401
+from .solve import FlowCase, potential_prior, solve_case  # noqa: F401
 
 __all__ = [
     "PanelSolver",
@@ -25,4 +25,5 @@ __all__ = [
     "ViscousState",
     "FlowCase",
     "solve_case",
+    "potential_prior",
 ]

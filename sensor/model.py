@@ -278,8 +278,11 @@ class UNet(nn.Module):
             nn.SiLU(),
             nn.Conv2d(widths[0], cfg.out_channels, 1),
         )
+        # The head is handed the *raw* condition, not the lifted one: it is a
+        # five-number regression and the raw incidence and Reynolds number are
+        # exactly what it wants, unmixed.
         self.scalar_head = ScalarHead(
-            widths, widths[0], cfg.n_scalars, max(block_cond, 1) if cond_dim else 1
+            widths, widths[0], cfg.n_scalars, max(len(cfg.global_idx), 1)
         )
 
     # ------------------------------------------------------------------ pieces
