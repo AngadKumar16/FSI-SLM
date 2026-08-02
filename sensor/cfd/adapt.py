@@ -36,7 +36,7 @@ import numpy as np
 from ..flow.panel import PanelSolver, resample_polygon
 from ..flow.solve import N_PANELS
 from ..geometry import Airfoil, close_trailing_edge, rotate
-from ..sdf import Grid, input_tensor, signed_distance_and_edge
+from ..sdf import Grid, build_input, signed_distance_and_edge
 from ..structure.beam import (
     ALUMINIUM,
     DEFAULT_E_STAR,
@@ -270,7 +270,13 @@ def build_case_arrays(
     }
 
     out = {
-        "input": input_tensor(af, alpha_deg, reynolds, grid, sdf=sdf),
+        # Same builder as the panel path, and the same channels: a RANS row has
+        # no panel solve of its own, so the inviscid prior is recomputed here.
+        # It is a function of geometry and incidence only, which is exactly why
+        # it is available at both fidelities.
+        "input": build_input(
+            af, alpha_deg, reynolds, grid, sdf=sdf, fidelity=fidelity
+        ),
         "target": np.stack([u, v, p, load_field, disp_field]).astype(np.float32),
         "mask": fluid.astype(np.float32),
         "solid_mask": solid_f,
