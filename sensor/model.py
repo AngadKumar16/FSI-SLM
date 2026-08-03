@@ -391,12 +391,35 @@ class LossConfig:
     circulation: float = 0.05    # Kutta-Joukowski tie between field and Cl
     near_wall: float = 3.0       # extra weight on pixels within the wall band
     wall_band_px: float = 3.0
-    huber_delta: float = 1.0     # scalar loss: Huber, in normalised units
-    channel_weights: Tuple[float, ...] = (1.0, 1.5, 1.5, 1.0, 1.0)
+
+    # Scalar loss. "huber" caps the gradient of an outlier at ``huber_delta``
+    # standard deviations, which stops one bad case owning a batch -- and, on a
+    # heavy-tailed target, stops the network learning the cases that carry the
+    # variance at all. Measured: with delta = 1.0 the trailing-edge twist came
+    # out at R^2 = -0.08 on the held-out sections, i.e. worse than predicting
+    # the mean, with RMSE/MAE = 2.35. Those tails are the deep-stall cases and
+    # they are the whole point of the channel. Default is now a delta wide
+    # enough to be quadratic through the bulk of the distribution while still
+    # clipping a genuine outlier; "mse" restores the unclipped behaviour.
+    scalar_loss: str = "huber"
+    huber_delta: float = 4.0
+
+    # Per-scalar weight over (cl, cd, cm, w_max, twist_te_deg). The two
+    # structural scalars are derived from the chordwise beam driven by the
+    # leading-edge pressure peak -- the one place a 42 px/chord raster
+    # under-resolves -- so they need the help.
+    scalar_weights: Tuple[float, ...] = (1.0, 1.0, 1.0, 1.5, 2.0)
+
+    # Field channels (u, v, p, load, disp). ``v`` and ``p`` are defined by
+    # gradients rather than their own magnitude; ``load`` and ``disp`` live in
+    # the ~1,100-pixel solid region and were the two channels that got worse
+    # when the others got better.
+    channel_weights: Tuple[float, ...] = (1.0, 1.5, 1.5, 1.5, 1.5)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["channel_weights"] = list(self.channel_weights)
+        d["scalar_weights"] = list(self.scalar_weights)
         return d
 
 
@@ -477,11 +500,18 @@ def surrogate_loss(
     struct_err = (pred[:, 3:] - target[:, 3:]).abs() * cw[:, 3:]
     struct_loss = _weighted_mean(struct_err, solid.expand_as(struct_err), sample_weight)
 
-    # Huber, not MSE: five normalised scalars, and a single badly-predicted
-    # deep-stall case should not own the batch gradient.
-    scalar_per = F.huber_loss(
-        scalar_pred, scalar_target, reduction="none", delta=cfg.huber_delta
-    ).mean(dim=1)
+    if cfg.scalar_loss == "mse":
+        scalar_err = (scalar_pred - scalar_target) ** 2
+    else:
+        scalar_err = F.huber_loss(
+            scalar_pred, scalar_target, reduction="none", delta=cfg.huber_delta
+        )
+    sw = torch.as_tensor(
+        cfg.scalar_weights, dtype=scalar_err.dtype, device=scalar_err.device
+    )
+    # Weighted *mean*, so the overall scale of the term does not move when the
+    # weights change and the other loss terms stay comparable across runs.
+    scalar_per = (scalar_err * sw).sum(dim=1) / sw.sum()
     if sample_weight is None:
         scalar_loss = scalar_per.mean()
     else:
@@ -558,6 +588,8 @@ def masked_loss(
         field=field_weight, solid=solid_weight, scalar=scalar_weight,
         gradient=0.0, divergence=0.0, circulation=0.0, near_wall=0.0,
         channel_weights=(1.0, 1.0, 1.0, 1.0, 1.0),
+        scalar_weights=(1.0, 1.0, 1.0, 1.0, 1.0),
+        scalar_loss="mse",
     )
     total, log = surrogate_loss(
         pred, target, mask, scalar_pred, scalar_target, cfg, sample_weight
