@@ -856,6 +856,7 @@ def sensor_preflight(
     downsample: int = 1,
     device: str = "auto",
     steps: int = 6,
+    preload: str = "auto",
 ) -> None:
     """Time a few real training steps and project the cost of the full run.
 
@@ -870,6 +871,7 @@ def sensor_preflight(
     print(json.dumps(preflight(
         cache_dir=_resolve_path(cache_dir), epochs=epochs, batch_size=batch_size,
         base=base, depth=depth, downsample=downsample, device=device, steps=steps,
+        preload=preload if preload == "auto" else _flag("preload", preload),
     ), indent=2))
 
 
@@ -889,6 +891,7 @@ def sensor_train(
     fidelity_weights: Optional[str] = None,
     init_from: Optional[str] = None,
     ema_decay: float = 0.999,
+    preload: str = "auto",
 ) -> None:
     """Train the U-Net surrogate (fields + force coefficients).
 
@@ -912,6 +915,7 @@ def sensor_train(
         fidelity_weights=weights,
         init_from=_resolve_path(init_from) if init_from else None,
         ema_decay=ema_decay,
+        preload=preload if preload == "auto" else _flag("preload", preload),
     ), indent=2))
 
 
