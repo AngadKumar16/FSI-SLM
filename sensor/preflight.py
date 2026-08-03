@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import SensorCache, compute_norm_stats, make_torch_dataset
+from .data import SensorCache, _array_bytes, compute_norm_stats, make_torch_dataset
 from .model import EMA, LossConfig, UNet, UNetConfig, pick_device
 from .train import _Trainer, _downsample_batch
 
@@ -46,6 +46,7 @@ def preflight(
     steps: int = 6,
     lr: float = 2.0e-3,
     augment: bool = True,
+    preload: bool | str = "auto",
 ) -> dict:
     """Time a few real training steps and report what the full run will cost."""
     report: dict = {"checks": []}
@@ -65,8 +66,9 @@ def preflight(
         ok("device", str(dev))
 
     # ---- data ---------------------------------------------------------------
-    cache = SensorCache(cache_dir)
+    cache = SensorCache(cache_dir, preload=preload)
     spec = cache.spec
+    report["preloaded"] = cache.preloaded
     n_done = int(np.asarray(cache.done).sum())
     if n_done < len(cache.cases):
         warn("cache complete",
@@ -131,9 +133,18 @@ def preflight(
     # ---- steps --------------------------------------------------------------
     it = iter(dl)
     times = []
+    data_times = []
     parts_last: dict = {}
     for i in range(steps):
-        batch = _downsample_batch(next(it), downsample)
+        # Timed separately, and this is the whole point. Loading is serial with
+        # the step (num_workers is 0 by necessity), and with shuffling every
+        # batch pulls its rows from random offsets in an 821 MB file. Timing
+        # only the model made the first projection of a 64 x 64 run come out at
+        # ten minutes against an actual three hours forty-four.
+        td = time.time()
+        raw = next(it)
+        data_times.append(time.time() - td)
+        batch = _downsample_batch(raw, downsample)
         t = time.time()
         x = batch["x"].to(dev)
         y = batch["y"].to(dev)
@@ -162,8 +173,21 @@ def preflight(
     ok("loss terms", ", ".join(f"{k} {v:.3f}" for k, v in parts_last.items()))
 
     step_s = float(np.median(times[1:] or times))
+    data_s = float(np.median(data_times[1:] or data_times))
     report["seconds_per_step"] = round(step_s, 3)
-    report["seconds_per_epoch"] = round(step_s * steps_per_epoch, 1)
+    report["data_seconds_per_batch"] = round(data_s, 3)
+    report["seconds_per_epoch"] = round((step_s + data_s) * steps_per_epoch, 1)
+    if data_s > step_s:
+        detail = (
+            f"loading a batch costs {data_s:.3f}s against {step_s:.3f}s of compute, "
+            f"so this run is I/O bound"
+        )
+        if not cache.preloaded:
+            detail += ". Preload the cache into RAM (--preload true); it is "
+            detail += f"{_array_bytes(Path(cache_dir)) / 1024 ** 3:.2f} GB"
+        warn("data loading", detail)
+    else:
+        ok("data loading", f"{data_s:.3f}s per batch against {step_s:.3f}s of compute")
 
     # One validation pass, through the averaged weights, exactly as training does.
     val_ds = make_torch_dataset(cache, "val", stats)

@@ -222,21 +222,62 @@ def build_cache(
     }
 
 
-class SensorCache:
-    """Read-only view over the memmap cache with split-aware indexing."""
+def _array_bytes(cache_dir: Path) -> int:
+    return sum(
+        (cache_dir / n).stat().st_size
+        for n in ("inputs.npy", "targets.npy", "masks.npy", "scalars.npy")
+        if (cache_dir / n).exists()
+    )
 
-    def __init__(self, cache_dir: str | Path = "artifacts/sensor/cache"):
+
+def _should_preload(cache_dir: Path, limit_gb: float = 6.0) -> bool:
+    """Whether the cache is small enough to hold in RAM. Errs toward not."""
+    return _array_bytes(cache_dir) < limit_gb * 1024 ** 3
+
+
+class SensorCache:
+    """View over the memmap cache with split-aware indexing.
+
+    ``preload`` reads the arrays into RAM instead of memory-mapping them. This
+    is not a micro-optimisation: training shuffles, so every batch pulls sixteen
+    rows from random offsets in an 821 MB file, and each row is a 426 kB read.
+    An epoch is ~1.8 GB of scattered page faults on a single Python thread, and
+    it dominated everything -- a 64 x 64 epoch that computes in about nine
+    seconds took two hundred and twenty-four. The whole cache is 1.2 GB, so on
+    any machine that can train this model it belongs in memory.
+
+    ``"auto"`` preloads when the arrays fit comfortably; pass ``False`` on a
+    memory-constrained box, at the cost of the factor above.
+    """
+
+    def __init__(
+        self,
+        cache_dir: str | Path = "artifacts/sensor/cache",
+        preload: bool | str = False,
+    ):
         self.dir = Path(cache_dir)
         self.index = json.loads((self.dir / "index.json").read_text())
         self.cases = self.index["cases"]
         self.splits = self.index["splits"]
         self.scalar_names = self.index.get("scalar_names", list(SCALAR_NAMES))
         self.spec = InputSpec.from_dict(self.index.get("input_spec"))
-        self.inputs = np.load(self.dir / "inputs.npy", mmap_mode="r")
-        self.targets = np.load(self.dir / "targets.npy", mmap_mode="r")
-        self.masks = np.load(self.dir / "masks.npy", mmap_mode="r")
-        self.scalars = np.load(self.dir / "scalars.npy", mmap_mode="r")
+        if preload == "auto":
+            preload = _should_preload(self.dir)
+        self.preloaded = bool(preload)
+        mode = None if self.preloaded else "r"
+        if self.preloaded:
+            t0 = time.time()
+            print(
+                f"preloading {_array_bytes(self.dir) / 1024 ** 3:.2f} GB of cache "
+                f"into memory", flush=True,
+            )
+        self.inputs = np.load(self.dir / "inputs.npy", mmap_mode=mode)
+        self.targets = np.load(self.dir / "targets.npy", mmap_mode=mode)
+        self.masks = np.load(self.dir / "masks.npy", mmap_mode=mode)
+        self.scalars = np.load(self.dir / "scalars.npy", mmap_mode=mode)
         self.done = np.load(self.dir / "done.npy", mmap_mode="r")
+        if self.preloaded:
+            print(f"  loaded in {time.time() - t0:.1f}s", flush=True)
         self.fidelity_codes = self.index.get("fidelity_codes", {"panel": 0})
         self.code_to_fidelity = {v: k for k, v in self.fidelity_codes.items()}
         fid_path = self.dir / "fidelity.npy"

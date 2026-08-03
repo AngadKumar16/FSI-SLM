@@ -182,6 +182,7 @@ def train(
     warmup_frac: float = 0.05,
     init_from: Optional[str] = None,
     loss_cfg: Optional[LossConfig] = None,
+    preload: bool | str = "auto",
 ) -> dict:
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -194,7 +195,11 @@ def train(
     dev = pick_device(device)
     loss_cfg = loss_cfg or LossConfig()
 
-    cache = SensorCache(cache_dir)
+    # Shuffled access to a memmapped 821 MB cache is ~1.8 GB of random page
+    # faults per epoch on one thread, and it was 95% of the wall clock: a
+    # 64 x 64 epoch that computes in nine seconds took two hundred and
+    # twenty-four. The arrays are 1.2 GB total.
+    cache = SensorCache(cache_dir, preload=preload)
     spec = cache.spec
     # Normalisation is cached in the run directory, but it must be invalidated
     # when the dataset underneath changes -- reusing statistics computed against
@@ -452,6 +457,10 @@ def main() -> None:
     p.add_argument("--accum-steps", type=int, default=1)
     p.add_argument("--init-from", default=None,
                    help="checkpoint to initialise from (two-stage fine-tuning)")
+    p.add_argument("--no-preload", action="store_true",
+                   help="memory-map the cache instead of loading it into RAM. "
+                        "Costs roughly 25x on epoch time; only for a box that "
+                        "cannot spare 1.2 GB")
     p.add_argument(
         "--fidelity-weights", default=None,
         help='per-fidelity loss weights, e.g. "panel=1,rans=10"',
@@ -485,7 +494,7 @@ def main() -> None:
         attention=not args.no_attention, film=not args.no_film,
         dropout=args.dropout, ema_decay=args.ema_decay,
         accum_steps=args.accum_steps, init_from=args.init_from,
-        loss_cfg=loss_cfg,
+        loss_cfg=loss_cfg, preload=not args.no_preload,
     )
     print(json.dumps(out, indent=2))
 
