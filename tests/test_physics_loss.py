@@ -125,3 +125,31 @@ def test_condition_vector_is_read_exactly():
     assert torch.allclose(
         cond, torch.tensor([[0.5 * (k + 1) for k in range(len(cfg.global_idx))]])
     )
+
+
+def test_r2_is_flagged_when_the_target_barely_varies():
+    """A ratio against a vanishing denominator has to announce itself.
+
+    The foil-disjoint split is stratified by series, not by response range, and
+    the test foils turned out to be stiff in torsion: their trailing-edge twist
+    varies about six times less than the validation foils'. The same checkpoint
+    then scores R^2 = 0.96 on val and -0.08 on test while its RMSE hardly moves,
+    and the second number reads as a broken model rather than a narrow split.
+    """
+    import numpy as np
+
+    from sensor.predict import evaluate_split  # noqa: F401  (import guard only)
+
+    # The arithmetic the reporting relies on, stated directly: with residuals
+    # the size of the spread, R^2 lands at zero no matter how good the model is
+    # in absolute terms.
+    true = np.array([1.0, 1.2, 0.9, 1.1, 1.05])
+    pred = true + 0.15
+    ss_res = float(((pred - true) ** 2).sum())
+    ss_tot = float(((true - true.mean()) ** 2).sum())
+    r2 = 1.0 - ss_res / ss_tot
+    rmse = float(np.sqrt(((pred - true) ** 2).mean()))
+    assert r2 < 0.0
+    assert rmse == pytest.approx(0.15)
+    # nrmse is the number that survives a narrow split.
+    assert rmse / true.std() > 1.0

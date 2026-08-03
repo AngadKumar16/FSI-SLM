@@ -392,11 +392,29 @@ def evaluate_split(
         err = s_pred[:, i] - s_true[:, i]
         ss_res = float((err ** 2).sum())
         ss_tot = float(((s_true[:, i] - s_true[:, i].mean()) ** 2).sum())
+        std = float(s_true[:, i].std())
+        rmse = float(np.sqrt((err ** 2).mean()))
+        # R^2 is a ratio against the spread of *this* sample, so it says as much
+        # about the split as about the model. The foil-disjoint split is
+        # stratified by series, not by response range, and the test foils happen
+        # to be stiff in torsion: their trailing-edge twist has about a sixth of
+        # the variance the validation foils do. The same checkpoint therefore
+        # scores R^2 = 0.96 on val and -0.08 on test while its RMSE barely
+        # moves. Report the scale-free error alongside, and say when the
+        # denominator is too small to carry a ratio.
         scalars[name] = {
             "mae": float(np.abs(err).mean()),
-            "rmse": float(np.sqrt((err ** 2).mean())),
+            "rmse": rmse,
             "r2": float(1.0 - ss_res / (ss_tot + 1e-12)),
+            "target_std": std,
+            "nrmse": float(rmse / (std + 1e-12)),
+            "r2_meaningful": bool(std > 1e-6 and len(idx) >= 30),
         }
+        if not scalars[name]["r2_meaningful"]:
+            scalars[name]["note"] = (
+                f"target varies by only {std:.3g} over n = {len(idx)}; R^2 here "
+                f"describes the sample, not the model. Use rmse and nrmse."
+            )
 
     fields = {
         name: {
