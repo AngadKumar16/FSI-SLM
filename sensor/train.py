@@ -472,6 +472,16 @@ def main() -> None:
     ):
         p.add_argument(f"--w-{name}", type=float, default=default,
                        help=f"loss weight for the {name.replace('-', ' ')} term")
+    p.add_argument("--scalar-loss", choices=("huber", "mse"),
+                   default=LossConfig.scalar_loss,
+                   help="'huber' clips outlier gradients; 'mse' does not. A "
+                        "heavy-tailed target such as the trailing-edge twist "
+                        "needs the tails")
+    p.add_argument("--huber-delta", type=float, default=LossConfig.huber_delta)
+    p.add_argument("--scalar-weights", default=None,
+                   help="comma-separated weights over cl,cd,cm,w_max,twist_te_deg")
+    p.add_argument("--channel-weights", default=None,
+                   help="comma-separated weights over u,v,p,load,disp")
     args = p.parse_args()
     weights = None
     if args.fidelity_weights:
@@ -479,11 +489,23 @@ def main() -> None:
             k.strip(): float(v)
             for k, v in (part.split("=") for part in args.fidelity_weights.split(","))
         }
+    _weights = lambda s, n: (
+        tuple(float(v) for v in s.split(",")) if s else None
+    )
     loss_cfg = LossConfig(
         gradient=args.w_gradient, divergence=args.w_divergence,
         circulation=args.w_circulation, near_wall=args.w_near_wall,
-        scalar=args.w_scalar,
+        scalar=args.w_scalar, scalar_loss=args.scalar_loss,
+        huber_delta=args.huber_delta,
+        **{k: v for k, v in (
+            ("scalar_weights", _weights(args.scalar_weights, 5)),
+            ("channel_weights", _weights(args.channel_weights, 5)),
+        ) if v is not None},
     )
+    for name, w in (("scalar_weights", loss_cfg.scalar_weights),
+                    ("channel_weights", loss_cfg.channel_weights)):
+        if len(w) != 5:
+            raise SystemExit(f"--{name.replace('_', '-')} needs 5 values, got {len(w)}")
     out = train(
         cache_dir=args.cache_dir, run_dir=args.run_dir, epochs=args.epochs,
         batch_size=args.batch_size, lr=args.lr, base=args.base, depth=args.depth,

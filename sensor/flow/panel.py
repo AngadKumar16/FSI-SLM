@@ -294,8 +294,22 @@ class PanelSolver:
         for i in range(0, px.size, _CHUNK):
             sl = slice(i, min(i + _CHUNK, px.size))
             us, vs, uv, vv = self._influence(px[sl], py[sl])
-            src_u = us @ sol.sigma
-            src_v = vs @ sol.sigma
+            # Apple's Accelerate BLAS raises the divide-by-zero, overflow and
+            # invalid FPE flags during some GEMM calls even when every input and
+            # every output is finite -- the same behaviour already documented in
+            # solve(). NumPy 2 surfaces those as RuntimeWarnings attributed to
+            # these two lines, and they appeared on every prediction once the
+            # inviscid prior started being built at inference time. Suppress the
+            # flags, then check the result rather than trusting the suppression.
+            with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                src_u = us @ sol.sigma
+                src_v = vs @ sol.sigma
+            if not (np.all(np.isfinite(src_u)) and np.all(np.isfinite(src_v))):
+                raise RuntimeError(
+                    f"panel source induction is not finite on "
+                    f"{int((~np.isfinite(src_u)).sum())} of {src_u.size} points: "
+                    f"max|sigma| = {np.max(np.abs(sol.sigma)):.3e}"
+                )
             vort_u = uv.sum(axis=1)
             vort_v = vv.sum(axis=1)
             for k, g in enumerate(scales):
