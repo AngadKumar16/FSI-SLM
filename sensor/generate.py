@@ -127,10 +127,17 @@ def _row_from_meta(meta: dict) -> dict:
         # Unsteady rows carry the one quantity a steady solve cannot produce:
         # the vortex-shedding frequency, measured rather than correlated. The
         # twin bridge downstream would otherwise fall back on Fage-Johansen.
+        # ``organised_shedding`` is not decoration: the twin bridge refuses to
+        # use a measured frequency without it, because the peak-finder returns
+        # the largest bin whether or not a street exists. Dropping it from the
+        # row made every URANS case fall back to the correlation it was solved
+        # to replace.
         **{
             k: (meta.get("unsteady") or {}).get(k)
             for k in ("f_shed", "strouhal_chord", "strouhal_projected",
-                      "cl_rms", "cd_rms", "n_cycles", "statistically_steady")
+                      "cl_rms", "cd_rms", "n_cycles", "statistically_steady",
+                      "organised_shedding", "shedding_prominence",
+                      "shedding_note", "stationarity_note")
         },
     }
 

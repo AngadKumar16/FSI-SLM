@@ -23,7 +23,7 @@ import json
 import shutil
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -34,6 +34,7 @@ from ..geometry import load_dat
 from ..sdf import Grid
 from ..simulate import pack_npz
 from .case import CaseParams, write_case
+from .sweep import run_sweep
 from .mesh import MeshParams, build_mesh
 from .run import convert_mesh, read_force_coeffs, read_residuals, solve
 from .sample import sample_case
@@ -134,40 +135,30 @@ def build_dataset(
     max_workers: int = 1,
     keep_case: bool = False,
     progress: bool = True,
+    resume: bool = True,
 ) -> dict:
     """Run a RANS sweep into the shared dataset directory.
 
     Point ``out_dir`` at the panel sweep's directory to mix fidelities, then run
     ``python cli.py sensor-cache`` to rebuild the training cache.
+
+    Rows are streamed to the chunk file as each case finishes, and ``resume``
+    (default on) skips any (foil, alpha) that already has an ``ok`` row at RANS
+    fidelity or better -- so an interrupted sweep restarts where it stopped
+    rather than re-solving what already succeeded.
     """
     out_dir = Path(out_dir)
     rows_dir = out_dir / "rows"
-    rows_dir.mkdir(parents=True, exist_ok=True)
     jobs = [(Path(p), float(a)) for p in dat_paths for a in alphas]
 
-    rows = []
     t0 = time.time()
-    if max_workers == 1:
-        for p, a in jobs:
-            rows.append(run_one(p, a, out_dir, reynolds, keep_case))
-            if progress:
-                _log(rows[-1], len(rows), len(jobs), t0)
-    else:
-        with ProcessPoolExecutor(max_workers=max_workers) as pool:
-            futs = {
-                pool.submit(run_one, p, a, out_dir, reynolds, keep_case): (p, a)
-                for p, a in jobs
-            }
-            for fut in as_completed(futs):
-                rows.append(fut.result())
-                if progress:
-                    _log(rows[-1], len(rows), len(jobs), t0)
-
-    rows.sort(key=lambda r: (r["foil"], r["alpha_deg"]))
-    chunk = rows_dir / f"rans_{int(t0)}.jsonl"
-    with chunk.open("w") as fh:
-        for r in rows:
-            fh.write(json.dumps({k: v for k, v in r.items() if k != "traceback"}) + "\n")
+    worker = partial(
+        run_one, out_dir=out_dir, reynolds=reynolds, keep_case=keep_case
+    )
+    rows, chunk, skipped = run_sweep(
+        jobs, worker, rows_dir, prefix="rans", fidelity="rans",
+        max_workers=max_workers, resume=resume, progress=progress, log=_log,
+    )
 
     ok = [r for r in rows if r["ok"]]
     return {
@@ -175,6 +166,7 @@ def build_dataset(
         "cases": len(rows),
         "ok": len(ok),
         "failed": len(rows) - len(ok),
+        "skipped_already_solved": len(skipped),
         "seconds": round(time.time() - t0, 1),
         "failures": [
             {"foil": r["foil"], "alpha": r["alpha_deg"], "error": r["error"]}

@@ -201,15 +201,29 @@ momentum-integral theorem.
   a fidelity *conditioning channel*, per-fidelity loss weights, and two-stage
   fine-tuning — and `sensor-multifidelity` picks train-split foils and solves
   them. But it has not been *run*: the only RANS cases in the dataset are still
-  on NACA 0009, which is in the test split. Until it is run, asking a checkpoint
-  for `fidelity="rans"` returns an extrapolation warning, by design.
+  the 15 on NACA 0009, which is in the test split. Until it is run, asking a
+  checkpoint for `fidelity="rans"` returns an extrapolation warning, by design.
+  The run itself is scripted end to end (`scripts/run_multifidelity.sh`) and
+  gated (`scripts/verify_multifidelity.py data`), which is what turns "the code
+  supports it" into a number that can be reported. The gate currently fails, on
+  exactly these two counts, and printing that failure is the point of it.
 - **Structural coupling is one-way and static.** Pressure drives deflection;
   deflection does not feed back.
 - **URANS is written but not run.** `sensor/cfd/unsteady.py` and its analysis
   are tested end-to-end on synthetic records and on the OpenFOAM output format
   (`tests/test_unsteady.py`, 10 tests), but no transient case has been solved
   yet. Every post-stall number in this document is still from the steady solver
-  and is still unusable.
+  and is still unusable. The plan is 12 cases — `n64012a`, `naca0008`,
+  `naca23018`, `naca63206` at 12°, 16°, 20° — at hours apiece, which is the
+  entire schedule risk in this project.
+- **Fixed on the way there, worth stating because both were silent.** The sweep
+  drivers wrote their rows only after the final case returned, so an
+  interruption anywhere in a day-long URANS sweep threw away every solved case;
+  rows are now flushed per case and an already-solved case is skipped on
+  re-run. And the twin bridge's preference for a measured shedding frequency
+  could never fire, because nothing attached the URANS block to a live case —
+  `digital_twin` now looks it up in the manifest, and
+  `provenance.shedding_frequency` says which frequency the record was built on.
 
 ---
 
@@ -250,14 +264,30 @@ python cli.py sensor-eval --split test --fidelity rans --converged-only --out-pa
 ```
 
 High-fidelity rows on *training* foils, plus URANS past stall — this is the run
-that makes multi-fidelity training legitimate:
+that makes multi-fidelity training legitimate. It is a day or more of compute,
+so drive it with the script rather than by hand: every stage is marked, logged
+and resumable, and the two gates run in the right places.
+
+```bash
+./scripts/run_multifidelity.sh --dry-run              # what it will do
+nohup ./scripts/run_multifidelity.sh > artifacts/mf_logs/driver.log 2>&1 &
+./scripts/run_multifidelity.sh --list                 # progress
+```
+
+The same thing by hand, if a stage needs to be redone in isolation:
 
 ```bash
 python cli.py sensor-multifidelity                     # print the plan first
 python cli.py sensor-multifidelity --run --max-workers 4
-python cli.py sensor-finalize && python cli.py sensor-cache
-python cli.py sensor-train --lr 2e-4 --init-from artifacts/sensor/run/best.pt \
+python cli.py sensor-finalize
+python scripts/verify_multifidelity.py data            # training on test? gate
+python cli.py sensor-cache
+python cli.py sensor-train --lr 2e-4 --init-from artifacts/sensor/run3/best.pt \
     --run-dir artifacts/sensor/run_mf --fidelity-weights "panel=1,rans=8,urans=8"
+python cli.py sensor-eval --checkpoint artifacts/sensor/run_mf/best.pt \
+    --split test --fidelity rans --converged-only \
+    --out-path artifacts/sensor/eval_test_rans_mf.json
+python scripts/verify_multifidelity.py model           # did it actually improve
 ```
 
 Interactive zsh does not treat `#` as a comment, so a trailing note on these

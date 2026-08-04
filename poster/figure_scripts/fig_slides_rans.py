@@ -14,7 +14,9 @@ Out:  poster/generated/slide1_rans_validation.png   (slide 1, primary)
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -42,8 +44,21 @@ def load_rans(foil: str = "n0009sm") -> list[dict]:
 
 
 def load_evals() -> tuple[dict, dict]:
-    p = json.loads((ROOT / "artifacts" / "sensor" / "eval_test_panel.json").read_text())
-    r = json.loads((ROOT / "artifacts" / "sensor" / "eval_test_rans.json").read_text())
+    """The two score files, overridable so the slide can show the fine-tuned run.
+
+    After the multi-fidelity run there are two versions of every score -- the
+    baseline and the fine-tuned checkpoint -- and the slide has to be able to
+    show either without the figure script being edited between them:
+
+        FSI_EVAL_PANEL=artifacts/sensor/eval_test_panel_mf.json \
+        FSI_EVAL_RANS=artifacts/sensor/eval_test_rans_mf.json \
+        python poster/figure_scripts/fig_slides_rans.py
+    """
+    base = ROOT / "artifacts" / "sensor"
+    p_path = Path(os.environ.get("FSI_EVAL_PANEL") or base / "eval_test_panel.json")
+    r_path = Path(os.environ.get("FSI_EVAL_RANS") or base / "eval_test_rans.json")
+    p = json.loads((p_path if p_path.is_absolute() else ROOT / p_path).read_text())
+    r = json.loads((r_path if r_path.is_absolute() else ROOT / r_path).read_text())
     return p, r
 
 
