@@ -138,7 +138,7 @@ def test_r2_is_flagged_when_the_target_barely_varies():
     """
     import numpy as np
 
-    from sensor.predict import evaluate_split  # noqa: F401  (import guard only)
+    from sensor.predict import _r2_is_meaningful
 
     # The arithmetic the reporting relies on, stated directly: with residuals
     # the size of the spread, R^2 lands at zero no matter how good the model is
@@ -153,3 +153,13 @@ def test_r2_is_flagged_when_the_target_barely_varies():
     assert rmse == pytest.approx(0.15)
     # nrmse is the number that survives a narrow split.
     assert rmse / true.std() > 1.0
+
+    # The flag itself, on the split the commit is about: the test foils have a
+    # real spread (std ~ 1.46 over n = 308) but the error is the size of it, so
+    # nrmse >= 1 and R^2 must NOT be reported as meaningful. A bare std > 0 test
+    # -- what the first fix shipped -- would wrongly pass this case.
+    assert _r2_is_meaningful(std=1.461, n=308, nrmse=1.05) is False
+    # Same spread, a model that clears the mean baseline: R^2 is informative.
+    assert _r2_is_meaningful(std=1.461, n=308, nrmse=0.19) is True
+    # Near-constant target (the RANS rows): degenerate denominator, still flagged.
+    assert _r2_is_meaningful(std=1e-9, n=308, nrmse=0.1) is False
