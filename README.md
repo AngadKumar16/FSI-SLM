@@ -309,11 +309,18 @@ network is allowed to see:
 
 ```bash
 python cli.py sensor-multifidelity                  # print the plan first
-python cli.py sensor-multifidelity --run --max-workers 4
-python cli.py sensor-finalize && python cli.py sensor-cache
-python cli.py sensor-train --lr 2e-4 --init-from artifacts/sensor/run/best.pt \
-    --fidelity-weights "panel=1,rans=8,urans=8"
+./scripts/run_multifidelity.sh --dry-run            # then drive the whole run
+nohup ./scripts/run_multifidelity.sh > artifacts/mf_logs/driver.log 2>&1 &
+./scripts/run_multifidelity.sh --list               # stage-by-stage progress
 ```
+
+The script runs checks, backup, both CFD sweeps, finalize, the data gate, cache,
+fine-tune, per-fidelity eval, the model gate, figures and tests. Stages are
+marked and resumable, and so are the sweeps themselves — a URANS case costs
+hours, rows are flushed as they finish, and an already-solved case is skipped on
+re-run. `scripts/verify_multifidelity.py data` is the gate that decides whether
+the high-fidelity rows are legal to train on at all; it exits non-zero when they
+are not.
 
 > The numbers previously quoted here — `Cl` R² = 0.996, relative field RMSE
 > 0.025 (`u`), 0.16 (`v`), 0.17 (`p`) — were measured on the *previous*

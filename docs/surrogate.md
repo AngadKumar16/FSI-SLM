@@ -357,7 +357,47 @@ python cli.py sensor-finalize && python cli.py sensor-cache
 
 The plan picks train-split foils one per series (seeded, so the choice is
 reproducible and reportable) and solves each below stall with steady RANS and
-above stall with URANS.
+above stall with URANS. At `--n-foils 4, --seed 0` that is `n64012a`,
+`naca0008`, `naca23018`, `naca63206`: 20 steady cases at −4, 0, 4, 6, 8 and 12
+unsteady cases at 12, 16, 20.
+
+### Running it without losing a day of compute
+
+The whole chain — checks, backup, both sweeps, finalize, the data gate, cache,
+fine-tune, per-fidelity eval, the model gate, figures, tests — is one script:
+
+```bash
+nohup ./scripts/run_multifidelity.sh > artifacts/mf_logs/driver.log 2>&1 &
+./scripts/run_multifidelity.sh --list          # what is done, what is pending
+./scripts/run_multifidelity.sh --from cache    # pick it up at a stage
+```
+
+Each stage leaves a marker in `artifacts/mf_state/` and a log in
+`artifacts/mf_logs/`, so re-running the script after a crash resumes rather than
+restarting. The CFD stages resume *inside* themselves as well: rows are flushed
+to the chunk file per case and `--resume` (default) skips a (foil, angle) that
+already has an `ok` row at that fidelity or better. That property is not a
+nicety at URANS speed — the drivers previously wrote every row after the last
+case finished, so an interruption anywhere in a day-long sweep discarded all of
+it, and a re-run re-solved the cases that had already succeeded. Steady will not
+overwrite an unsteady row; unsteady *will* re-solve a steady one, which is the
+upgrade the sweep exists to perform.
+
+Two gates decide whether the result is reportable, and both exit non-zero rather
+than printing a caveat:
+
+```bash
+python scripts/verify_multifidelity.py data    # after finalize, before cache
+python scripts/verify_multifidelity.py model   # after train and eval
+```
+
+`data` is the one that matters. It asserts the high-fidelity rows landed on
+train-split foils, that the split did not move under them (it is recomputed by
+`finalize_manifest`), that every URANS row carries `organised_shedding` and
+`statistically_steady`, that the twin bridge can actually find those rows, and
+that each row has its `.npz`. `model` compares the fine-tuned checkpoint against
+the baseline on the same rows and fails if the RANS pressure error did not fall
+or the panel score degraded by more than 25%.
 
 ---
 
@@ -420,6 +460,26 @@ built on. It now prefers a measured value when the case carries one, and says
 which it used. The difference between a measured and a correlated frequency is
 the difference between a lock-in call that means something and one that restates
 an assumption.
+
+"When the case carries one" was, until the lookup below existed, never. Both
+twin paths — solver and surrogate — build the flow from geometry alone and carry
+no time series, so the block `_measured_shedding` reads was always absent and
+every record silently fell back to the correlation, including for cases that had
+been solved transiently at hours apiece. `digital_twin` now looks the case up in
+the manifest by foil key and incidence and attaches the measured block:
+
+```python
+lookup_unsteady("n0012", 12.0, "artifacts/cfd/manifest.jsonl")
+```
+
+The match is on the .dat stem (`n0012`), not the title inside the file (`NACA
+0012`) — those differ, and matching on the title finds nothing. The angle must
+agree to a quarter of a degree, because shedding frequency varies with incidence
+and a nearby case is a different measurement. `provenance.shedding_frequency` on
+every record says which of the two was used, and `_row_from_meta` now carries
+`organised_shedding` into the manifest — without it the bridge refuses the
+measurement, since the peak-finder returns the largest bin whether or not a
+street exists.
 
 ```bash
 python cli.py sensor-urans --foils Data/Airfoils/4/n0012.dat.txt --alphas 12,16,20

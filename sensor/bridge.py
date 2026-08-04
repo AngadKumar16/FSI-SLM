@@ -37,6 +37,7 @@ changes -- that is the point of the ``RawExperiment`` contract.
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -293,6 +294,87 @@ def _measured_shedding(case: dict, cfg: TwinConfig):
     return f, note
 
 
+UNSTEADY_KEYS = (
+    "f_shed", "strouhal_chord", "strouhal_projected", "cl_rms", "cd_rms",
+    "n_cycles", "statistically_steady", "organised_shedding",
+    "shedding_prominence", "shedding_note", "stationarity_note",
+)
+
+
+def lookup_unsteady(
+    foil: str,
+    alpha_deg: float,
+    manifest: Union[str, Path] = "artifacts/cfd/manifest.jsonl",
+    tol_deg: float = 0.25,
+) -> Optional[dict]:
+    """The measured unsteady block for this (foil, angle), if one was solved.
+
+    Without this the URANS sweep never reaches the interpreter. A live panel or
+    U-Net case is built from geometry alone and carries no time series, so
+    :func:`_measured_shedding` found nothing and every twin fell back on the
+    Fage-Johansen correlation -- including for the exact cases that had been
+    solved transiently at a cost of hours each.
+
+    The match is on foil key and incidence, not on the fields, so it applies
+    equally to a solver case and a surrogate case: the frequency is a property
+    of the flow, not of which model produced the pressure field. The angle must
+    match to a quarter of a degree, because shedding frequency varies with
+    incidence and a nearby case is a different measurement.
+
+    ``foil`` is the manifest key -- the .dat stem, ``n0012`` -- not the title
+    inside the file (``NACA 0012``). Those differ, and matching on the title
+    silently found nothing.
+    """
+    path = Path(manifest)
+    if not path.exists():
+        return None
+    want = str(foil).strip().lower().replace(" ", "")
+    best = None
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not r.get("ok") or r.get("fidelity") != "urans":
+            continue
+        name = str(r.get("foil", "")).strip().lower().replace(" ", "")
+        if name != want or r.get("alpha_deg") is None:
+            continue
+        if abs(float(r["alpha_deg"]) - float(alpha_deg)) > tol_deg:
+            continue
+        best = r
+        break
+    if best is None:
+        return None
+    block = {k: best.get(k) for k in UNSTEADY_KEYS if best.get(k) is not None}
+    return block or None
+
+
+def foil_key(airfoil: Union[str, Path, Airfoil], case: Optional[dict] = None) -> str:
+    """The manifest key for a foil: the .dat stem, not the title in the file."""
+    if isinstance(airfoil, (str, Path)):
+        return Path(airfoil).stem.replace(".dat", "")
+    return str((case or {}).get("foil") or getattr(airfoil, "name", "")).strip()
+
+
+def attach_measured_unsteady(
+    case: dict,
+    foil: str,
+    manifest: Union[str, Path] = "artifacts/cfd/manifest.jsonl",
+) -> dict:
+    """Attach the URANS block to a live case, in place, when one exists."""
+    if case.get("unsteady"):
+        return case
+    block = lookup_unsteady(foil, case.get("alpha_deg", 0.0), manifest)
+    if block:
+        case["unsteady"] = block
+        case["unsteady_source"] = str(manifest)
+        case["unsteady_foil"] = foil
+    return case
+
+
 def build_raw_experiment(
     case: dict,
     cfg: TwinConfig,
@@ -526,6 +608,7 @@ def digital_twin(
     seed: int = 0,
     inject_faults: Sequence[str] = (),
     with_den_hartog: bool = True,
+    manifest: Union[str, Path, None] = "artifacts/cfd/manifest.jsonl",
 ) -> dict:
     """Geometry + incidence -> fields -> ``FeatureRecord`` + data-quality report.
 
@@ -543,6 +626,14 @@ def digital_twin(
         if predictor is not None
         else solver_case(airfoil, alpha_deg, cfg, grid)
     )
+
+    # Neither path carries a time series -- both build the flow from geometry
+    # alone -- so the measured shedding frequency has to be looked up. Without
+    # this the URANS sweep never reaches the interpreter and the lock-in call
+    # is made on the Fage-Johansen correlation even for cases solved
+    # transiently at hours apiece.
+    if manifest:
+        attach_measured_unsteady(case, foil_key(airfoil, case), manifest)
 
     dh = None
     if with_den_hartog:
@@ -576,5 +667,11 @@ def digital_twin(
                 "damping_ratio": cfg.damping_ratio,
             },
             "signals": "synthesised by a 1-DOF instrument model, not measured",
+            # Which of the two shedding frequencies this record was built on.
+            # A lock-in call means something different in each case.
+            "shedding_frequency": (
+                "measured (URANS)" if case.get("unsteady") else "Fage-Johansen correlation"
+            ),
+            "unsteady_source": case.get("unsteady_source"),
         },
     }

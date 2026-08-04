@@ -45,8 +45,8 @@ import json
 import shutil
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
@@ -58,6 +58,7 @@ from ..sdf import Grid
 from ..simulate import pack_npz
 from .adapt import build_case_arrays
 from .case import HEADER, _f
+from .sweep import run_sweep
 from .mesh import MeshParams, build_mesh
 from .run import foam
 
@@ -609,42 +610,30 @@ def build_unsteady_dataset(
     max_workers: int = 1,
     keep_case: bool = False,
     progress: bool = True,
+    resume: bool = True,
 ) -> dict:
     """Run a URANS sweep into the shared dataset directory.
 
     Point ``out_dir`` at the panel sweep's directory; ``finalize_manifest``
     merges the rows and prefers the unsteady one wherever it exists, then
     ``python cli.py sensor-cache`` rebuilds the training cache.
+
+    A case here costs hours, so rows are flushed to the chunk file the moment
+    each one finishes and ``resume`` (default on) skips any (foil, alpha) that
+    already has an ``ok`` URANS row. A steady or panel row does *not* count as
+    solved -- re-solving those at URANS is the whole point.
     """
     up = up or UnsteadyParams()
     out_dir = Path(out_dir)
     rows_dir = out_dir / "rows"
-    rows_dir.mkdir(parents=True, exist_ok=True)
     jobs = [(Path(p), float(a)) for p in dat_paths for a in alphas]
 
-    rows = []
     t0 = time.time()
-    if max_workers == 1:
-        for p, a in jobs:
-            rows.append(run_one(p, a, out_dir, up, keep_case))
-            if progress:
-                _log(rows[-1], len(rows), len(jobs), t0)
-    else:
-        with ProcessPoolExecutor(max_workers=max_workers) as pool:
-            futs = {
-                pool.submit(run_one, p, a, out_dir, up, keep_case): (p, a)
-                for p, a in jobs
-            }
-            for fut in as_completed(futs):
-                rows.append(fut.result())
-                if progress:
-                    _log(rows[-1], len(rows), len(jobs), t0)
-
-    rows.sort(key=lambda r: (r["foil"], r["alpha_deg"]))
-    chunk = rows_dir / f"urans_{int(t0)}.jsonl"
-    with chunk.open("w") as fh:
-        for r in rows:
-            fh.write(json.dumps({k: v for k, v in r.items() if k != "traceback"}) + "\n")
+    worker = partial(run_one, out_dir=out_dir, up=up, keep_case=keep_case)
+    rows, chunk, skipped = run_sweep(
+        jobs, worker, rows_dir, prefix="urans", fidelity="urans",
+        max_workers=max_workers, resume=resume, progress=progress, log=_log,
+    )
 
     ok = [r for r in rows if r["ok"]]
     steady = [r for r in ok if r.get("converged")]
@@ -654,6 +643,7 @@ def build_unsteady_dataset(
         "ok": len(ok),
         "statistically_steady": len(steady),
         "failed": len(rows) - len(ok),
+        "skipped_already_solved": len(skipped),
         "seconds": round(time.time() - t0, 1),
         "shedding": [
             {"foil": r["foil"], "alpha": r["alpha_deg"],

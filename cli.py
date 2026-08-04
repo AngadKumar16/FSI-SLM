@@ -754,12 +754,16 @@ def sensor_rans(
     reynolds: float = 5.0e5,
     max_workers: int = 1,
     keep_case: bool = False,
+    resume: bool = True,
 ) -> None:
     """Steady RANS (simpleFoam) sweep. Use below stall only.
 
     ``--foils`` is a comma-separated list of .dat paths. Above about 10 degrees
     steady SIMPLE has no fixed point to converge to -- use ``sensor-urans``
     there instead.
+
+    ``--resume`` (default) skips cases already solved at RANS fidelity or
+    better; ``--resume false`` re-solves everything.
     """
     from sensor.cfd.dataset import build_dataset
 
@@ -768,6 +772,7 @@ def sensor_rans(
     print(json.dumps(build_dataset(
         paths, a, _resolve_path(out_dir), reynolds=reynolds,
         max_workers=max_workers, keep_case=keep_case,
+        resume=_flag("resume", resume),
     ), indent=2))
 
 
@@ -780,6 +785,7 @@ def sensor_urans(
     t_start_average: float = 20.0,
     max_workers: int = 1,
     keep_case: bool = False,
+    resume: bool = True,
 ) -> None:
     """Unsteady RANS (pimpleFoam) sweep: time-averaged fields + shedding frequency.
 
@@ -787,6 +793,10 @@ def sensor_urans(
     (chord / freestream), so the defaults leave roughly ten shedding cycles in
     the averaging window. Each case reports whether its statistics actually
     settled; that flag, not the exit code, is what ``--converged-only`` reads.
+
+    A case costs hours, so rows are flushed as they finish and ``--resume``
+    (default) restarts an interrupted sweep where it stopped. A steady row does
+    not count as solved here -- upgrading it is the point.
     """
     from sensor.cfd.unsteady import UnsteadyParams, build_unsteady_dataset
 
@@ -798,6 +808,7 @@ def sensor_urans(
     print(json.dumps(build_unsteady_dataset(
         paths, a, _resolve_path(out_dir), up=up,
         max_workers=max_workers, keep_case=keep_case,
+        resume=_flag("resume", resume),
     ), indent=2))
 
 
@@ -807,6 +818,9 @@ def sensor_multifidelity(
     seed: int = 0,
     run: bool = False,
     max_workers: int = 1,
+    resume: bool = True,
+    steady_only: bool = False,
+    unsteady_only: bool = False,
 ) -> None:
     """Plan (and optionally run) high-fidelity coverage of *training* foils.
 
@@ -831,12 +845,18 @@ def sensor_multifidelity(
 
     from sensor.cfd.unsteady import build_unsteady_dataset
 
+    resume = _flag("resume", resume)
+    do_steady = not _flag("unsteady_only", unsteady_only)
+    do_unsteady = not _flag("steady_only", steady_only)
+
     steady = build_dataset(
-        plan["dats"], plan["steady"]["alphas"], out, max_workers=max_workers
-    )
+        plan["dats"], plan["steady"]["alphas"], out,
+        max_workers=max_workers, resume=resume,
+    ) if do_steady else {"skipped": "steady stage disabled"}
     unsteady = build_unsteady_dataset(
-        plan["dats"], plan["unsteady"]["alphas"], out, max_workers=max_workers
-    )
+        plan["dats"], plan["unsteady"]["alphas"], out,
+        max_workers=max_workers, resume=resume,
+    ) if do_unsteady else {"skipped": "unsteady stage disabled"}
     print(json.dumps({
         "plan": plan, "steady": steady, "unsteady": unsteady,
         "next": [
