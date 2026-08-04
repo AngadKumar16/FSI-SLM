@@ -295,6 +295,18 @@ def _avg_pool_np(a: np.ndarray, k: int) -> np.ndarray:
     return a.reshape(*a.shape[:-2], h // k, k, w // k, k).mean(axis=(-3, -1))
 
 
+def _r2_is_meaningful(std: float, n: int, nrmse: float) -> bool:
+    """R^2 informs only when the target varies AND the model beats the mean.
+
+    A bare ``std > 0`` threshold flags the near-constant RANS rows but passes a
+    split whose spread is merely small relative to the error. There ``nrmse``
+    reaches 1 and R^2 goes negative for a perfectly good model -- the artifact
+    the foil-disjoint test split hit. Require the model to clear the
+    constant-mean baseline (``nrmse < 1``) as well.
+    """
+    return bool(std > 1e-6 and n >= 30 and nrmse < 1.0)
+
+
 def evaluate_split(
     checkpoint: Union[str, Path] = DEFAULT_CHECKPOINT,
     cache_dir: str = "artifacts/sensor/cache",
@@ -394,26 +406,43 @@ def evaluate_split(
         ss_tot = float(((s_true[:, i] - s_true[:, i].mean()) ** 2).sum())
         std = float(s_true[:, i].std())
         rmse = float(np.sqrt((err ** 2).mean()))
+        nrmse = float(rmse / (std + 1e-12))
         # R^2 is a ratio against the spread of *this* sample, so it says as much
         # about the split as about the model. The foil-disjoint split is
         # stratified by series, not by response range, and the test foils happen
         # to be stiff in torsion: their trailing-edge twist has about a sixth of
         # the variance the validation foils do. The same checkpoint therefore
         # scores R^2 = 0.96 on val and -0.08 on test while its RMSE barely
-        # moves. Report the scale-free error alongside, and say when the
-        # denominator is too small to carry a ratio.
+        # moves -- not because the model collapsed, but because nrmse ~ 1 there:
+        # the error is the size of the spread. So R^2 only carries information
+        # when the target actually varies (std > 0) AND the model beats the
+        # constant-mean baseline (nrmse < 1); a bare std threshold catches the
+        # near-constant RANS rows but not this small-spread split, which is the
+        # one the commit is about. Flag the rest and report nrmse.
+        r2_meaningful = _r2_is_meaningful(std, len(idx), nrmse)
         scalars[name] = {
             "mae": float(np.abs(err).mean()),
             "rmse": rmse,
             "r2": float(1.0 - ss_res / (ss_tot + 1e-12)),
             "target_std": std,
-            "nrmse": float(rmse / (std + 1e-12)),
-            "r2_meaningful": bool(std > 1e-6 and len(idx) >= 30),
+            "nrmse": nrmse,
+            "r2_meaningful": r2_meaningful,
         }
-        if not scalars[name]["r2_meaningful"]:
+        if not r2_meaningful:
+            if std <= 1e-6 or len(idx) < 30:
+                cause = (
+                    f"target varies by only {std:.3g} over n = {len(idx)}; "
+                    f"the denominator cannot carry a ratio"
+                )
+            else:
+                cause = (
+                    f"nrmse = {nrmse:.3g} >= 1: the error is the size of the "
+                    f"spread on this split, so a negative R^2 reflects the "
+                    f"split, not the model"
+                )
             scalars[name]["note"] = (
-                f"target varies by only {std:.3g} over n = {len(idx)}; R^2 here "
-                f"describes the sample, not the model. Use rmse and nrmse."
+                f"{cause}. R^2 here describes the sample, not the model. "
+                f"Use rmse and nrmse."
             )
 
     fields = {
