@@ -74,16 +74,22 @@ class UnsteadyParams:
 
     Defaults are sized on the physics rather than on a guess. A stalled airfoil
     sheds at a chord-based Strouhal number around 0.15-0.25, i.e. a period of
-    4-7 convective times. ``t_start_average = 20`` discards the start-up
-    transient and the first few cycles; ``t_end = 80`` then leaves roughly ten
-    shedding cycles in the averaging window, which is the usual minimum for a
-    stable mean and a resolvable spectral peak.
+    4-7 convective times. ``t_start_average = 15`` discards the start-up
+    transient and the first couple of cycles; ``t_end = 45`` then leaves a
+    30-convective-time window (~6 shedding cycles at St 0.2), which is what
+    :func:`statistics_converged` needs to pass its ``min_cycles = 6`` gate on a
+    strongly shedding case. The window used to be 15 (t_end 30) to keep the run
+    tractable off a cluster, but that was ~3 cycles -- below the gate -- so every
+    organised case came back ``converged = False``; the mesh coarsening that made
+    a case ~10x cheaper is what buys the honest window back. The deepest-stall,
+    lowest-St cases (period ~7) still clear only ~4 cycles and may flag -- those
+    genuinely need longer, and the per-case stationarity report says so.
     """
 
     reynolds: float = 5.0e5
     span: float = 0.1              # must match MeshParams.span
-    t_end: float = 80.0            # convective times
-    t_start_average: float = 20.0
+    t_end: float = 45.0            # convective times
+    t_start_average: float = 15.0
     max_courant: float = 2.0       # PIMPLE with outer correctors tolerates > 1
     max_delta_t: float = 0.01
     initial_delta_t: float = 1.0e-4
@@ -91,7 +97,7 @@ class UnsteadyParams:
     n_correctors: int = 2
     turb_intensity: float = 0.05
     turb_length: float = 0.1
-    write_interval: float = 20.0   # only the final average is actually needed
+    write_interval: float = 10.0   # checkpoint cadence for resume; only final avg needed
 
     @property
     def average_window(self) -> float:
@@ -215,7 +221,7 @@ def write_unsteady_case(case_dir: str | Path, up: UnsteadyParams | None = None) 
     return d
 
 
-def solve_unsteady(case_dir: Path, timeout: int = 21600):
+def solve_unsteady(case_dir: Path, timeout: int = 39600):
     return foam(case_dir,
                 "renumberMesh -overwrite -constant > log.renumber 2>&1; "
                 "pimpleFoam > log.pimpleFoam 2>&1; tail -2 log.pimpleFoam",

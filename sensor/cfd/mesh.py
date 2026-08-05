@@ -25,11 +25,42 @@ from ..geometry import Airfoil, rotate
 class MeshParams:
     radius: float = 20.0        # far-field radius (chords)
     span: float = 0.1           # z-thickness of the single cell layer
-    wall_size: float = 2.0e-3   # target cell size at the foil wall (chords)
+    wall_size: float = 4.0e-3   # target cell size at the foil wall (chords)
     far_size: float = 1.5       # cell size at far field
-    refine_dist: float = 1.5    # distance over which size grows wall->far
-    wake_size: float = 2.0e-2   # size in the near wake box
+    refine_dist: float = 1.0    # distance over which size grows wall->far
+    wake_size: float = 3.0e-2   # size in the near wake box
+    wake_xmax: float = 4.0      # downstream extent of the wake refinement box
+    # Merge boundary panels shorter than this before meshing. A tabulated
+    # section carries a blunt-TE base segment (~5e-4 c for the 6-series set)
+    # and, on some foils, sub-1e-3 clustering at the nose. Each raw coordinate
+    # is a *forced* mesh node, so one 5e-4 panel plants a 5e-4 cell whose
+    # Courant limit then pins the URANS time step at ~6e-4 -- 50k+ steps to
+    # cover the averaging window -- no matter how coarse ``wall_size`` is.
+    # Collapsing panels below this floor sharpens the TE (a 5e-4 gap is 0.05%
+    # of chord; negligible) and lets ``wall_size`` actually set the step.
+    min_panel: float = 3.0e-3
     pivot: tuple[float, float] = (0.25, 0.0)
+
+
+def _merge_short_panels(pts: np.ndarray, floor: float) -> np.ndarray:
+    """Drop points that sit closer than ``floor`` to the previous kept point.
+
+    Walks the open polygon (the closing point already dropped) greedily, then
+    checks the wrap-around segment so the collapsed trailing edge does not leave
+    a sub-floor panel between the last kept point and the first. Endpoints of the
+    coarsest regions are preserved because the median panel is far above the
+    floor; only the blunt-TE base and any nose slivers are actually removed.
+    """
+    if len(pts) < 4:
+        return pts
+    keep = [pts[0]]
+    for p in pts[1:]:
+        if float(np.hypot(*(p - keep[-1]))) >= floor:
+            keep.append(p)
+    # The wrap segment (last -> first) can still be short after a TE collapse.
+    while len(keep) > 3 and float(np.hypot(*(keep[-1] - keep[0]))) < floor:
+        keep.pop()
+    return np.asarray(keep)
 
 
 def build_mesh(af: Airfoil, alpha_deg: float, out_msh: str | Path,
@@ -40,6 +71,7 @@ def build_mesh(af: Airfoil, alpha_deg: float, out_msh: str | Path,
     out_msh = Path(out_msh)
     rot = rotate(af, alpha_deg, mp.pivot)
     pts = rot.xy[:-1]  # drop duplicated closing point; loop closed via lines
+    pts = _merge_short_panels(pts, mp.min_panel)
 
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
@@ -83,7 +115,7 @@ def build_mesh(af: Airfoil, alpha_deg: float, out_msh: str | Path,
     gmsh.model.mesh.field.setNumber(f_wake, "VIn", mp.wake_size)
     gmsh.model.mesh.field.setNumber(f_wake, "VOut", mp.far_size)
     gmsh.model.mesh.field.setNumber(f_wake, "XMin", 0.0)
-    gmsh.model.mesh.field.setNumber(f_wake, "XMax", 6.0)
+    gmsh.model.mesh.field.setNumber(f_wake, "XMax", mp.wake_xmax)
     gmsh.model.mesh.field.setNumber(f_wake, "YMin", -1.2)
     gmsh.model.mesh.field.setNumber(f_wake, "YMax", 1.2)
     gmsh.model.mesh.field.setNumber(f_wake, "Thickness", 1.0)
