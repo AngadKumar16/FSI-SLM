@@ -63,18 +63,20 @@ with a `converged: false` flag and a residual, and the eval script filters on it
 **Figure (primary):** `generated/slide2_fidelity_transfer.png`
 **Figure (backup):** `generated/slide2_alt_transfer_ratio.png`
 
-- One checkpoint, `artifacts/sensor/run/best.pt`, 2.27 M parameters, epoch 58.
-  It never saw a RANS case in training.
+- One checkpoint, `artifacts/sensor/run3/best.pt`, 11.59 M parameters, epoch 59,
+  full 128 × 128. It never saw a RANS case in training.
 - Scored twice: against 293 panel-method cases on held-out sections, and against
   the 7 converged RANS cases on NACA 0009.
-- Streamwise velocity error is *lower* against RANS (0.020) than against the
-  panel targets it was trained on (0.025). Drag MAE is the same to four decimals,
-  0.0029 either way.
-- Lift error grows 2.4×, from 0.033 to 0.078. The panel backend runs 5–15% high
-  near stall by construction, and the network learned that bias along with the
-  physics.
-- Structural channels do not survive the switch. Displacement goes from 0.239 to
-  0.521 relative RMSE, and load from 0.040 to 0.126.
+- **Drag error is *lower* against RANS** (MAE 0.00194) than against the panel
+  targets it was trained on (0.00230). At n = 7 the claim to make is "does not
+  degrade", not "improves".
+- **Streamwise velocity barely degrades** — 0.0227 to 0.0259, a factor of 1.14,
+  against 2.5–5× for every other channel.
+- Lift error grows 5.2×, from 0.0168 to 0.0879. The panel backend runs 5–15%
+  high near stall by construction, and the network learned that bias along with
+  the physics.
+- Structural channels do not survive the switch. Displacement goes from 0.113 to
+  0.576 relative RMSE, and load from 0.079 to 0.200.
 
 ### What the primary figure shows
 
@@ -82,9 +84,10 @@ Left panel pairs the two scores channel by channel. The teal bar is the grade
 against panel targets, the coral bar against RANS. Read it as: how much of what
 this network learned is about fluid mechanics, and how much is about the quirks
 of the solver that generated its labels. If the network had memorised panel
-artefacts, every coral bar would be much longer than its teal partner. Instead
-`u` gets shorter, which is the strongest single piece of evidence we have that
-the surrogate is doing physics.
+artefacts, every coral bar would be far longer than its teal partner. Instead
+`u` is almost the same height and **drag is shorter under the harder grader** —
+that pair is the strongest single piece of evidence we have that the surrogate
+is doing physics rather than reproducing its labels.
 
 Right panel isolates the integrated forces on a log axis, because Cl and Cd MAE
 differ by an order of magnitude and would be unreadable on a shared linear
@@ -101,11 +104,11 @@ panel error. A dot to the left of the dashed line means the quantity got
 a room and it makes the ranking explicit, but it hides the absolute error, so a
 quantity can look bad by ratio while still being accurate in absolute terms.
 
-Note the two figures rank the failures differently and both rankings are true.
-By ratio, `load` is worst (×3.13). By absolute error, `disp` is worst (0.521).
-`load` starts from a very low panel-side error of 0.040, so tripling it still
-leaves it below the pressure field. If you show the backup, say which one you
-mean.
+Note the two figures can rank the failures differently and both rankings are
+true. By ratio, `disp` is worst (5.1×) closely followed by `Cl` (5.2×); by
+absolute error, `disp` is worst (0.576). A channel can look bad by ratio while
+still being accurate in absolute terms — `load` triples but stays below the
+pressure field. If you show the backup, say which one you mean.
 
 ### The honest read
 
@@ -113,8 +116,13 @@ Velocity and drag transfer across the fidelity gap. Lift carries a known,
 systematic, correctable bias. The structural channels need RANS cases in
 *training*, not just in test, because the chordwise beam integrates the
 leading-edge pressure difference and amplifies exactly the disagreement between
-the two solvers. That is the next run: regenerate a RANS subset through the same
-tensor contract and fine-tune the panel-pretrained network on it.
+the two solvers.
+
+That next run is **in progress**: high-fidelity cases on *training*-split foils,
+steady below stall and unsteady above it, so the rows are legal to train on
+(the existing RANS cases are all on NACA 0009, which is in the test split —
+training on them would be training on test). 8 of the 12 URANS cases are solved;
+only 3 are statistically settled so far.
 
 ### Likely questions
 
@@ -127,11 +135,14 @@ than an hour, and the transfer result says most of that pretraining survives.
 
 ---
 
-## One inconsistency to fix before you present
+## Lift-slope inconsistency — resolved
 
-`docs/results.md` §4 reports the lift slope as 0.099 per degree, or 90% of 2π.
-Fitting all seven converged points gives 0.095 per degree, 86% of 2π. The
-figure uses 0.095 because the script fits the whole converged branch, −8° to 8°.
-The 0.099 figure comes out only from a narrower fit near zero incidence
-(−4° to 4° gives 0.0978). Both are defensible; they should not be different
-numbers in two places. Pick one range, state it, and update the other file.
+This used to disagree between the slide and `docs/results.md`. It is now one
+number everywhere: **0.095 per degree, 5.43 per radian, 86% of 2π**, fitted by
+least squares through **all seven** converged points, −8° to 8°.
+
+The old 0.099 figure came from a narrower fit near zero incidence — over
+−4° to 4° the slope is 0.098 (89% of 2π), because the branch is already
+softening by 8°. Both are defensible, so the rule is to state the range. The
+figure script now fits the branch and prints the slope it actually fitted into
+the legend, so the two cannot drift apart again.

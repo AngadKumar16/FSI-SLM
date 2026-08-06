@@ -147,7 +147,7 @@ what matters for a training target.
 **What this is not.** It is not RANS. It has no turbulence model, no laminar
 separation bubble, no transition prediction, no compressibility, no
 three-dimensionality, and no unsteadiness. Cases with `f < 0.15` are tagged
-`deep_stall` in the manifest (219 of 1,926) so they can be down-weighted or
+`deep_stall` in the manifest (216 of 1,928 rows) so they can be down-weighted or
 regenerated with OpenFOAM.
 
 ---
@@ -164,6 +164,18 @@ would put the same shape in train and test at neighbouring incidences and
 inflate the score without measuring generalisation to an unseen shape. NACA 0009
 is pinned into the test set. Result: 76 train / 14 val / 17 test foils,
 stratified across the 4-digit, 5-digit and 6-series families.
+
+| Split | Foils | Rows | panel | RANS |
+|---|---|---|---|---|
+| train | 76 | 1,368 | 1,368 | 0 |
+| val | 14 | 252 | 252 | 0 |
+| test | 17 | 308 | 293 | 15 |
+| **total** | **107** | **1,928** | **1,913** | **15** |
+
+The manifest holds 1,928 rows rather than 1,926 because the RANS sweep on
+NACA 0009 added two incidences (13° and 15°) that the panel grid does not
+sample, giving 20 distinct angles across the dataset even though each panel foil
+is solved at 18.
 
 ```bash
 python cli.py sensor-generate                 # 1,926 cases, ~2 min on 4 cores
@@ -209,9 +221,10 @@ global vector — see FiLM below.
 
 ### 5.2 Architecture
 
-U-Net, four down/up steps, GroupNorm and SiLU, residual conv blocks, ~11 M
-parameters at `--base 32`. Seven departures from the standard setup, each for a
-reason:
+U-Net, four down/up steps, GroupNorm and SiLU, residual conv blocks,
+**11,589,130 parameters** at `--base 32`, depth 4, 8 norm groups, replicate
+padding, FiLM and bottleneck attention both on. Seven departures from the
+standard setup, each for a reason:
 
 - **Shared trunk for flow and structure.** The load field *is* the surface
   pressure, so the structural head should reuse those features rather than
@@ -307,6 +320,34 @@ the dataset so a changed dataset forces a recompute rather than silently
 rescaling the loss, and a mismatched cache is refused with a message rather than
 a broadcast error.
 
+### 5.6 What it scores
+
+Released checkpoint `artifacts/sensor/run3/best.pt`, epoch 59, full 128 × 128,
+trained on panel rows only, evaluated with mirror test-time averaging on the
+**293 held-out cases across 17 unseen sections**.
+
+| Scalar | R² | MAE | nRMSE | | Field | rel. RMSE |
+|---|---|---|---|---|---|---|
+| `Cl` | 0.998 | 0.0168 | 0.046 | | `u` | 0.023 |
+| `Cd` | 0.995 | 0.0023 | 0.068 | | `v` | 0.077 |
+| `Cm` | 0.991 | 0.0037 | 0.095 | | `p` | 0.108 |
+| `w_max/c` | 0.968 | 2.7 × 10⁻⁴ | 0.178 | | `load` | 0.079 |
+| `twist_TE` | 0.786 | 0.227° | 0.462 | | `disp` | 0.113 |
+
+`twist_TE` is the weakest channel and always has been: it is a second derivative
+of the deflection field, read at the one station where the beam is unconstrained,
+so it inherits every error in `load` and amplifies it. R² 0.79 at an MAE of
+0.23° is usable for ranking sections and not for absolute twist.
+
+Test and validation agree closely (val: `Cl` R² 0.998, `Cd` R² 0.999, `u`
+rel-RMSE 0.023 over 252 cases on 14 different unseen foils), so the test split is
+not an unlucky or lucky draw.
+
+Mirror test-time averaging is worth 2–18% depending on channel — most on `disp`
+(18.2%) and `Cl` (17.1%), least on `twist_TE`, where it is within noise. The
+ablation and the cross-fidelity transfer tables are in
+[results.md](results.md) §3.1 and §5.
+
 ---
 
 ## 5b. Multi-fidelity
@@ -344,10 +385,11 @@ python cli.py sensor-train --run-dir artifacts/sensor/run_ft --lr 2e-4 \
 
 ### Getting high-fidelity rows that are legal to train on
 
-The RANS cases that exist are all on NACA 0009, which is pinned to the **test**
-split — using them for training would be training on test, which is why the
-multi-fidelity path was wired and tested but never actually used. What it needs
-is high-fidelity rows on foils the network is allowed to see:
+The RANS cases in the manifest are all on NACA 0009, which is pinned to the
+**test** split — using them for training would be training on test, which is why
+the multi-fidelity path was wired and tested but has not yet produced a released
+checkpoint. What it needs is high-fidelity rows on foils the network is allowed
+to see:
 
 ```bash
 python cli.py sensor-multifidelity                # print the plan, spend nothing
@@ -360,6 +402,19 @@ reproducible and reportable) and solves each below stall with steady RANS and
 above stall with URANS. At `--n-foils 4, --seed 0` that is `n64012a`,
 `naca0008`, `naca23018`, `naca63206`: 20 steady cases at −4, 0, 4, 6, 8 and 12
 unsteady cases at 12, 16, 20.
+
+**Status: this sweep is running.** The steady stage is complete; the URANS stage
+has solved 8 of its 12 cases, with `naca63206` and `naca23018` at 20° still in
+flight. Rows are flushed per case to `artifacts/cfd/rows/urans_*.jsonl` and are
+deliberately **not** merged into the manifest yet — `sensor-finalize` should run
+once at the end of a sweep, not against a moving dataset — so no number in
+[results.md](results.md) is affected by them.
+
+Of the 8 solved, only 3 are `statistically_steady`. The α = 12° cases cover 0.5
+and 2.4 shedding cycles against the 6 required, because a fixed `t_end` in
+convective times buys far fewer cycles at low incidence than at 20°; those need
+a longer run, not a different solver. See [results.md](results.md) §7.1 for the
+per-case table and the peak-finder caveat it exposed.
 
 ### Running it without losing a day of compute
 

@@ -1,5 +1,22 @@
 # FSI-SLM Deployment Guide
 
+## What you are deploying
+
+The system has two independently-loadable models, and which one a request needs
+decides its cost. Deploy accordingly.
+
+| Model | Size | Loads when | Cost |
+|---|---|---|---|
+| Phi-4-mini-instruct + LoRA adapter | ~7.7 GB base + 46 MB adapter | first `/infer`, `/infer/stream`, or twin call with `--interpret` | ~30 s cold, ~3 s per request |
+| U-Net surrogate | 11.6 M params, ~45 MB | first `/sensor/*` or `/twin` call | ~1 s cold, milliseconds per request |
+| MiniLM-L6-v2 embedder + FAISS index | ~90 MB + 2.8 MB | first RAG-enabled request | ~2 s cold |
+
+**The surrogate endpoints do not need the language model.** A deployment that
+only serves `/sensor/predict` and `/sensor/polar` needs neither MLX nor the
+7.7 GB base model and will run comfortably in 2 GB of RAM on any platform. Split
+these into separate services if you can — it is the single biggest cost lever
+here.
+
 ## Deployment Options
 
 ### Option 1: FastAPI REST API (Recommended for Production)
@@ -90,7 +107,49 @@ Run: `docker-compose up -d`
 
 ---
 
-### Option 2: Gradio Web UI (Interactive/Research)
+### Option 2: MCP Server (Agentic Workflows)
+
+The MCP server speaks stdio, so it is *launched by the client*, not run as a
+long-lived service. There is no port and no reverse proxy — the client owns the
+process lifetime.
+
+```bash
+python cli.py mcp          # or: python -m serve.mcp_server
+```
+
+Claude Code picks it up automatically from the repo's `.mcp.json` for sessions
+opened in this directory. For Claude Desktop, add to
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "fsi-slm": {
+      "command": "python3",
+      "args": ["-m", "serve.mcp_server"],
+      "cwd": "/absolute/path/to/FSI-SLM"
+    }
+  }
+}
+```
+
+Three deployment notes specific to MCP:
+
+- **`cwd` must be absolute and must be the repo root.** Every default path in
+  `configs/default.yaml` is repo-relative; the server resolves them against the
+  working directory it is launched in.
+- **Model loading is lazy and per-tool.** `search_literature`,
+  `validate_interpretation`, `check_experiment_consistency`, `sweep_regime_map`,
+  `generate_synthetic_experiment`, `check_data_quality` and `surrogate_status`
+  never load the language model. Only `interpret_experiment` and `ask_question`
+  do, and the first such call costs ~30 s. Clients with short tool timeouts
+  should call `surrogate_status` first to warm the process.
+- **stdout belongs to the protocol.** Anything printed to stdout corrupts the
+  JSON-RPC stream. Log to stderr or to a file.
+
+---
+
+### Option 3: Gradio Web UI (Interactive/Research)
 
 #### Local Launch
 ```bash
@@ -183,6 +242,56 @@ curl http://localhost:8000/health
 ```bash
 curl http://localhost:8000/schema | jq
 ```
+
+**All 8 routes:**
+
+| Route | Needs SLM | Needs U-Net |
+|---|---|---|
+| `GET /health` | no | no |
+| `GET /schema` | no | no |
+| `POST /infer` | **yes** | no |
+| `POST /infer/stream` | **yes** | no |
+| `GET /sensor/status` | no | no (reads checkpoint metadata) |
+| `POST /sensor/predict` | no | **yes** |
+| `POST /sensor/polar` | no | **yes** |
+| `POST /twin` | only with `interpret: true` | **yes** |
+
+**Surrogate prediction (no language model loaded):**
+```bash
+curl -X POST http://localhost:8000/sensor/predict \
+  -H "Content-Type: application/json" \
+  -d '{"airfoil": "Data/Airfoils/4/n0009sm.dat.txt",
+       "alpha_deg": 12,
+       "reynolds": 5.0e5,
+       "return_fields": false}' | jq
+```
+
+**Polar sweep** (`alphas` defaults to −4…16 in 2° steps):
+```bash
+curl -X POST http://localhost:8000/sensor/polar \
+  -H "Content-Type: application/json" \
+  -d '{"airfoil": "Data/Airfoils/4/n0009sm.dat.txt", "alphas": [0, 4, 8, 12, 16]}' | jq
+```
+
+**Full twin — geometry to interpreted experiment:**
+```bash
+curl -X POST http://localhost:8000/twin \
+  -H "Content-Type: application/json" \
+  -d '{"airfoil": "Data/Airfoils/4/n0009sm.dat.txt",
+       "alpha_deg": 14,
+       "chord_m": 0.1,
+       "span_m": 0.3,
+       "u_inf_m_s": 5.0,
+       "use_surrogate": true,
+       "interpret": true,
+       "use_rag": false}' | jq
+```
+
+Set `return_fields: true` on `/sensor/predict` only when you need the rasters —
+the response then carries five 2-D arrays. `field_downsample` (default 4)
+average-pools them before serialising, so leaving it at the default returns
+32 × 32 rather than 128 × 128 and cuts the payload by 16×. Set it to 1 only if
+you actually need full resolution over the wire.
 
 **Run inference:**
 ```bash
@@ -282,12 +391,20 @@ python cli.py serve --port 8000
 
 ### Resource Requirements
 
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| RAM | 8 GB | 32 GB |
-| Disk | 5 GB (model + adapters) | 20 GB |
-| CPU | Apple M1 | Apple M4 Pro |
-| GPU | Metal-compatible | Metal GPU with 16 GB+ |
+Scale to what the deployment actually serves:
+
+| Deployment | RAM | Disk | Platform |
+|---|---|---|---|
+| Surrogate only (`/sensor/*`) | 2 GB | ~200 MB | any — CPU, CUDA or MPS |
+| + RAG search (`search_literature`) | 3 GB | ~300 MB | any |
+| Full stack (SLM interpretation) | 8 GB min, 16 GB recommended | ~10 GB | Apple Silicon for MLX |
+| Training the surrogate | 8 GB | +1.1 GB cache, +14 GB `.npz` | any; ~2 h on M4 Pro CPU |
+| Generating RANS/URANS data | 16 GB | +20 GB per sweep | needs OpenFOAM v2606 + gmsh |
+
+The 7.7 GB base language model dominates the full-stack figure. If you are
+deploying the surrogate as a service — which is the common case, since it is the
+part that replaces a CFD solve — you do not need it, and you are not tied to
+Apple Silicon.
 
 ---
 
@@ -322,6 +439,32 @@ ls -lh artifacts/models/Phi-4-mini-instruct/
 # Verify adapters exist
 ls -lh artifacts/adapters/
 ```
+
+### Surrogate Refuses a Checkpoint
+
+`SurrogatePredictor` validates a checkpoint by name and input spec rather than
+failing obscurely later. Two common causes:
+
+- **Architecture mismatch.** A checkpoint from an older architecture will not
+  load into the current one. Retrain, or point `--checkpoint` at a current run
+  directory.
+- **Cache/spec mismatch.** The checkpoint records its `input_spec` and a
+  fingerprint of the dataset it was normalised against. If the cache was built
+  with a different channel contract (`v2` vs `v2_noprior`), training and eval
+  refuse it with a message. Rebuild: `python cli.py sensor-cache`.
+
+Check what a checkpoint expects without loading a model:
+
+```bash
+curl http://localhost:8000/sensor/status | jq
+```
+
+### Surrogate Returns an Extrapolation Warning
+
+Asking for `fidelity="rans"` or `"urans"` from a checkpoint trained only on
+panel rows returns the prediction *plus* a warning that the conditioning channel
+is being extrapolated. This is by design, not a fault — the released checkpoint
+is panel-trained. See `implementation_plan.md` §3.2.
 
 ### Port Already in Use
 
@@ -371,8 +514,24 @@ export MLX_GPU_BUFFER_CACHE_SIZE=2048
 |------|---------|
 | Start API server | `python cli.py serve --port 8000` |
 | Start Gradio UI | `python cli.py ui` |
-| Run tests | `pytest tests/ -v` |
-| Generate data | `python cli.py generate-data --n-per-regime 40` |
-| Train model | `python cli.py train --epochs 3 --batch-size 4` |
-| Evaluate | `python cli.py eval` |
+| Start MCP server | `python cli.py mcp` |
+| Run tests (266) | `pytest tests/ -q` |
+| Generate SFT data | `python cli.py generate-data --n-per-regime 40` |
+| Train interpreter | `python cli.py train --epochs 3 --batch-size 4` |
+| Evaluate interpreter | `python cli.py eval --use-model` |
 | Index papers | `python cli.py index-corpus` |
+| Generate surrogate set | `python cli.py sensor-generate` |
+| Cache for training | `python cli.py sensor-cache` |
+| Train surrogate | `python cli.py sensor-train --epochs 80 --batch-size 16` |
+| Score surrogate | `python cli.py sensor-eval --split test --fidelity panel` |
+| One-shot prediction | `python cli.py sensor-predict --airfoil <path> --alpha 12` |
+| Full twin | `python cli.py twin --airfoil <path> --alpha 12 --interpret` |
+| No-install demo | `python cli.py demo` |
+
+Two shell traps worth knowing, both silent:
+
+- Interactive zsh does not treat `#` as a comment, so a trailing note on a
+  `cli.py` command arrives as positional arguments. `cli.py` detects and rejects
+  this rather than binding it to a parameter.
+- Negative numbers need `--alphas="-8,-4,0"` — with the `=` and the quotes. A
+  bare leading minus is parsed as a flag.
