@@ -34,6 +34,8 @@ python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12 --interp
 - **[docs/abstract_claims.md](docs/abstract_claims.md)** — every claim in the
   paper abstract mapped to the code that implements it, including the two that
   are not yet true
+- **[paper/README.md](paper/README.md)** — nine publication figures (PDF + PNG)
+  with draft captions; `python -m paper.figures --out paper/figures`
 
 ---
 
@@ -155,7 +157,7 @@ This creates:
 python cli.py index-corpus
 ```
 
-This extracts text from PDFs in `Data/Papers/`, embeds with `all-MiniLM-L6-v2`, builds a FAISS index, and saves to `artifacts/rag_index/`.
+This extracts text from PDFs in `Data/Papers/`, embeds with `all-MiniLM-L6-v2`, builds a FAISS index, and saves to `artifacts/rag_index/`. The shipped index covers **16 papers → 1,840 passages** (256 tokens, 50% overlap), retrieved top-3 at a 0.3 score threshold.
 
 ### 3. Train the model
 
@@ -210,6 +212,19 @@ curl -X POST http://localhost:8000/infer \
   -d '{"feature_record": <YOUR_JSON>, "use_rag": false}'
 ```
 
+**Routes (8):**
+
+| Route | Purpose |
+|---|---|
+| `GET /health` | Liveness + whether the model is loaded |
+| `GET /schema` | The `FeatureRecord` JSON schema |
+| `POST /infer` | Structured interpretation of a record, optional RAG |
+| `POST /infer/stream` | Same, token-streamed |
+| `GET /sensor/status` | Which surrogate checkpoint is loaded, its spec and fidelities |
+| `POST /sensor/predict` | Section + incidence → fields and coefficients |
+| `POST /sensor/polar` | Sweep incidence → `Cl`/`Cd`/`Cm` polar |
+| `POST /twin` | Geometry → fields → `FeatureRecord` + data-quality report |
+
 ### 7. Use it from Claude (MCP server)
 
 The project ships an MCP (Model Context Protocol) server that exposes the
@@ -235,19 +250,28 @@ opened in this directory. For Claude Desktop, add to
 }
 ```
 
-**Tools:**
+**Tools (12):**
 
 | Tool | What it does | Loads model? |
 |------|--------------|--------------|
-| `interpret_experiment` | Structured interpretation of a FeatureRecord (regime, lock-in, physics), optional RAG citations | Yes (first call, ~30s) |
-| `ask_question` | Free-text Q&A grounded in a FeatureRecord + retrieved literature | Yes |
+| `interpret_experiment` | Structured interpretation of a FeatureRecord (regime, lock-in, physics), optional RAG citations | SLM (first call, ~30s) |
+| `ask_question` | Free-text Q&A grounded in a FeatureRecord + retrieved literature | SLM |
 | `search_literature` | FAISS search over the indexed FSI paper corpus | No (embedder only) |
 | `validate_interpretation` | Parse + physics-check any generated interpretation | No |
 | `check_experiment_consistency` | Range + cross-field physics check of a FeatureRecord (units-bug detector) | No |
 | `sweep_regime_map` | What-if sweep of U*/AoA/f_n → regime map + transition boundaries | No |
 | `generate_synthetic_experiment` | Demo FeatureRecord for a chosen flow regime | No |
+| `predict_flow` | Surrogate: section + incidence → fields and coefficients | U-Net |
+| `predict_polar` | Surrogate: sweep incidence → `Cl`/`Cd`/`Cm` polar | U-Net |
+| `digital_twin_record` | Geometry → fields → `FeatureRecord` + data-quality report | U-Net |
+| `check_data_quality` | Run the 11 instrumentation-fault detectors on a record | No |
+| `surrogate_status` | Which checkpoint is loaded, its input spec and training fidelities | No |
 
 **Resources:** `fsi://schema/feature_record` — the FeatureRecord JSON schema.
+
+The first seven interpret an experiment; the last five produce or screen one.
+That split is the whole system in miniature — `digital_twin_record` feeding
+`interpret_experiment` is the full twin, callable from any agentic workflow.
 
 ### 8. Validate model output
 
@@ -267,6 +291,8 @@ All commands are accessible via the unified CLI:
 python cli.py <command> [options]
 ```
 
+21 commands; `python cli.py -- --help` lists them.
+
 | Command | Description |
 |---------|-------------|
 | `generate-data` | Generate synthetic RawExperiment data (JSONL) |
@@ -285,6 +311,7 @@ python cli.py <command> [options]
 | `sensor-urans` | Unsteady OpenFOAM sweep: time-averaged fields + measured shedding frequency |
 | `sensor-multifidelity` | Plan (and `--run`) high-fidelity coverage of *training* foils |
 | `sensor-finalize` | Merge sweep chunks into the manifest, highest fidelity wins |
+| `sensor-preflight` | Time a few real training steps and project the cost of the full run |
 | `sensor-train` | Train the U-Net (fields + force coefficients) |
 | `sensor-eval` | Score the surrogate on held-out sections |
 | `sensor-predict` | Coefficients (and fields) for one section and incidence |
@@ -322,12 +349,26 @@ re-run. `scripts/verify_multifidelity.py data` is the gate that decides whether
 the high-fidelity rows are legal to train on at all; it exits non-zero when they
 are not.
 
-> The numbers previously quoted here — `Cl` R² = 0.996, relative field RMSE
-> 0.025 (`u`), 0.16 (`v`), 0.17 (`p`) — were measured on the *previous*
-> architecture and are stale. The network was rewritten and the old checkpoint
-> does not load into it; `SurrogatePredictor` refuses it by name and tells you
-> to retrain. See [docs/results.md](docs/results.md) §8 for the commands that
-> regenerate every table.
+### Measured surrogate accuracy
+
+Held-out **293 cases across 17 unseen sections** (NACA 0009 among them), full
+128 × 128, 11.59 M parameters, mirror test-time averaging. Scored against the
+panel targets the network was trained on:
+
+| Scalar | R² | MAE | | Field | rel. RMSE |
+|---|---|---|---|---|---|
+| `Cl` | 0.998 | 0.0168 | | `u` | 0.023 |
+| `Cd` | 0.995 | 0.0023 | | `v` | 0.077 |
+| `Cm` | 0.991 | 0.0037 | | `p` | 0.108 |
+| `w_max/c` | 0.968 | 2.7e-4 | | `load` | 0.079 |
+| `twist_TE` | 0.786 | 0.227° | | `disp` | 0.113 |
+
+Cross-fidelity, on the held-out NACA 0009 against **steady RANS** truth the
+network never trained on (7 converged cases, α ≤ 8°): `u` degrades only 14%
+(0.0259) and `Cd` MAE is 0.00194 — *lower* than against panel. Lift carries the
+panel model's near-stall bias (5.2× the error) and the structural channels do
+not transfer (`disp` 0.58). Full tables, ablations and caveats:
+**[docs/results.md](docs/results.md)**.
 
 ### The full twin
 
@@ -490,6 +531,30 @@ The evaluation harness (`eval/evaluate.py`) reports:
 
 With-vs-without-RAG comparison is supported via `evaluate_with_rag()`.
 
+**Measured, released adapter**, 50 held-out records
+(`artifacts/eval_results/v2_vs_v3.json`):
+
+| Metric | Value |
+|---|---|
+| Regime macro F1 | 1.000 (50/50) |
+| Lock-in F1 | 0.857 (precision 0.750, recall 1.000) |
+| `f_shed`, `St`, `mode_number` accuracy | 1.000 |
+| `rms_amplitude_over_c` accuracy | 0.780 |
+| Avg field accuracy | 0.945 |
+
+Read those two ways. Regime classification is **saturated** at this sample
+size — that is a fact about the generated test set as much as about the model,
+and a harder test set is the honest next step. The discriminating number is
+lock-in F1: recall is perfect and precision is 0.750, so the model never misses
+a lock-in and calls 8 that are not there. RAG-augmented *training* was tried and
+did not help (lock-in F1 0.840 vs 0.857); only the no-RAG adapter ships.
+Retrieval at *inference* time is a separate mechanism and is still available via
+`--use-rag`. Details in [docs/results.md](docs/results.md) §7b.
+
+`python cli.py eval` defaults to the trained adapter when one exists and to the
+rule-based oracle when it does not — pass `--use-model` or `--baseline`
+explicitly, since the two produce very different tables.
+
 Tolerance semantics are explicit per field: shedding frequency is judged at
 15% *relative* tolerance, Strouhal number at ±0.05 *absolute*, RMS amplitude
 at ±0.02 *absolute*, and mode number must match exactly.
@@ -575,7 +640,7 @@ FSI-SLM/
 │   └── fastapi_app.py      # FastAPI inference server
 ├── tools/utils/
 │   └── repro.py            # Seed-setting utilities
-├── tests/                  # 220 tests
+├── tests/                  # 266 tests
 │   ├── test_schema.py
 │   ├── test_synthetic.py
 │   ├── test_features.py

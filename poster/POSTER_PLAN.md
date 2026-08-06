@@ -56,7 +56,8 @@ Three equal columns (~22 in each with gutters). Read top-to-bottom, left-to-righ
 
 ### METRIC CARDS STRIP (full width, ~5 in tall)
 - **Figure:** `fig_metric_cards.png` (place edge-to-edge).
-- These five numbers (1,926 cases · 5 regimes · 78% macro-F1 · 100% lock-in F1 · 1 laptop) are your headline. Judges remember numbers.
+- These five numbers (1,926 cases · 5 regimes · Cl R² = 0.998 on unseen foils · 2.3% velocity-field error · 1 laptop) are your headline. Judges remember numbers.
+- Do **not** put "100% regime accuracy" on a metric card even though it is true (50/50). It reads as a broken evaluation and invites exactly the wrong question. If you want an interpreter number on the strip, use **lock-in F1 = 0.857** and be ready to explain that recall is perfect and precision is 0.75. `fig_metric_cards.png` predates these results — regenerate it before printing.
 
 ---
 
@@ -118,7 +119,7 @@ Caption: "The five regimes occupy distinct regions of (Re, St) and (U*, α) spac
 > A full FSI digital twin — sensor + interpreter — that runs without a GPU cluster. It turns raw experiments into plain-language answers and stays grounded in the literature.
 
 **3.7 What's next (~30 words)**
-> Train the U-Net across all 1,926 cases and check the predicted Cl–α curve against XFOIL through stall; connect the live PIV rig; add load & displacement prediction for two-way FSI.
+> Finish the URANS sweep on training foils so high-fidelity rows become legal to train on; connect the live PIV rig; close the structural loop so deflection feeds back into the flow.
 
 **3.8 Footer:** QR to repo, acknowledgements, a one-line "Built with Python, MLX, OpenFOAM, FAISS."
 

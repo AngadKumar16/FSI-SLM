@@ -1,176 +1,332 @@
 # FSI-SLM Project Workflow
 
-End-to-end pipeline diagram for training and serving the Fluid-Structure
-Interaction Small Language Model. Renders inline in any markdown viewer
-that supports Mermaid (GitHub, GitLab, VSCode preview, etc.).
+How the repository fits together, end to end. Every box names the file that does
+the work, so a box is greppable. Mermaid renders inline in GitHub, GitLab and
+VSCode preview; `docs/workflow.txt` is the same content as ASCII for terminal
+viewing.
 
-## High-level pipeline
+The system has **two halves that meet at one contract**:
 
-```mermaid
-flowchart TB
-    subgraph sources["Inputs"]
-        PDFs["PDF library<br/>(Data/Papers/)"]
-        Synth["Simulator<br/>(Data/synthetic.py)"]
-        REAL["Real FSI data<br/>(RawExperiment JSON or manual entry)"]
-        QURY["User question<br/>(free text)"]
-    end
+| Half | Question it answers | Entry point |
+|---|---|---|
+| **Surrogate** (`sensor/`) | *What does the flow do?* — geometry + incidence → fields, forces, deflection | `cli.py sensor-predict` |
+| **Interpreter** (`Data/`, `features/`, `train/`, `rag/`, `inference/`) | *What does that mean?* — experiment record → regime, lock-in, caveats | `cli.py infer` |
 
-    subgraph build["Stage 1 - Build"]
-        FE["Signal feature extractor<br/>(features/extract.py)"]
-        DS["SFT dataset builder<br/>(Data/build_dataset.py)"]
-        BR["Paper chunk loader<br/>(rag/corpus_loader.py)"]
-        BI["Vector index builder<br/>(rag/index.py + FAISS + MiniLM-L6-v2)"]
-        FD["Rule-based oracle<br/>(Data/describe.py)"]
-    end
+The contract between them is `FeatureRecord` (`Data/schema.py`). The surrogate
+produces one; the interpreter consumes one. Because the contract is the only
+coupling, a real PIV rig can replace the surrogate without touching anything
+downstream — that substitution point is `sensor/bridge.py:build_raw_experiment`.
 
-    subgraph train["Stage 2 - Train"]
-        PT["Chat prompt template<br/>(train/tokenization/prompt_template.py)"]
-        SFT["LoRA trainer<br/>(train/sft.py, mlx_lm.lora)"]
-        BASE["Base language model<br/>(artifacts/models/Phi-4-mini-instruct)"]
-        ADAPT["Trained adapter<br/>(artifacts/adapters/, rank=8 46MB)"]
-    end
+`cli.py twin` runs both halves back to back, which is the full digital twin:
+geometry in, interpreted experiment out, no human step.
 
-    subgraph serve["Stage 3 - Serve"]
-        INF["Inference runner<br/>(inference/runner.py)"]
-        QA["Q&A path<br/>(runner.answer, base model + RAG)"]
-        EVAL["Scorer<br/>(eval/evaluate.py)"]
-        CLI["CLI commands<br/>(cli.py eval, infer)"]
-        API["HTTP API<br/>(serve/fastapi_app.py)"]
-        UI["Gradio web UI<br/>(serve/gradio_app.py, cli.py ui)"]
-    end
+---
 
-    Synth --> FE
-    REAL --> FE
-    FE --> FR["FeatureRecord<br/>(Data/schema.py Pydantic v2)"]
-    FR --> DS
-    FD --> DS
-    PT --> DS
-    DS --> JSONL["train.jsonl, val.jsonl, test.jsonl"]
-
-    PDFs --> BR
-    BR --> BI
-    BI --> IDX["Paper index<br/>(artifacts/rag_index/index.faiss)"]
-
-    BASE --> SFT
-    JSONL --> SFT
-    SFT --> ADAPT
-    PT --> SFT
-
-    ADAPT --> INF
-    IDX --> INF
-    IDX --> QA
-    FR --> INF
-    FR --> QA
-    BASE --> QA
-    QURY --> QA
-    INF --> EVAL
-    INF --> CLI
-    INF --> API
-    INF --> UI
-    QA --> UI
-    UI --> API
-```
-
-Two ways a user interacts with a record at serve time: the **structured
-interpretation** (the fixed 6-part description the trained adapter produces via
-`inference/runner.py:generate`) and **free-text questions** about that same
-record (answered by the base instruct model via `inference/runner.py:answer`,
-grounded in the feature record plus retrieved literature). The Gradio UI exposes
-both; real FSI data enters as a `RawExperiment` (extracted to a `FeatureRecord`)
-or is typed directly into the manual form.
-
-## CLI command flow
-
-```mermaid
-flowchart LR
-    G["Generate dataset<br/>(cli.py generate-data)"] --> B["Build SFT data<br/>(cli.py build-dataset)"]
-    I1["Index papers<br/>(cli.py index-corpus)"] --> R["RAG retriever<br/>(rag/retrieve.py)"]
-    B --> T["Train adapter<br/>(cli.py train)"]
-    T --> A["Adapter<br/>(artifacts/adapters/)"]
-    A --> E["Evaluate<br/>(cli.py eval)"]
-    A --> IN["Run single record<br/>(cli.py infer)"]
-    A --> S["HTTP server<br/>(cli.py serve)"]
-    A --> U["Web UI<br/>(cli.py ui)"]
-    R --> IN
-    R --> S
-    R --> E
-    R --> U
-```
-
-## UI and question flow (provide real data, then interpret or ask)
+## 1. The whole system
 
 ```mermaid
 flowchart TB
-    U["User<br/>(Gradio UI, serve/gradio_app.py)"]
-
-    subgraph provide["1 - Provide real FSI data"]
-        UP["Upload RawExperiment JSON"] --> EX["features/extract.py"]
-        FORM["Manual form (~25 fields)"] --> VAL["Validate FeatureRecord"]
-        EX --> FRR["Active FeatureRecord<br/>(+ range_warnings units check)"]
-        VAL --> FRR
+    subgraph inputs["Inputs"]
+        GEO["Airfoil section<br/>(Data/Airfoils/**.dat)"]
+        AOA["Angle of attack, Re"]
+        PDFs["Paper library<br/>(Data/Papers/, 16 PDFs)"]
+        RIG["Real PIV rig<br/>(not connected — contract only)"]
+        QRY["User question<br/>(free text)"]
     end
 
-    U --> provide
+    subgraph solvers["Stage A — Solve (sensor/)"]
+        PANEL["Panel method + viscous correction<br/>(sensor/flow/, ~0.13 s/case)"]
+        RANS["Steady RANS, k-omega SST<br/>(sensor/cfd/, ~4 min/case)"]
+        URANS["Unsteady RANS, pimpleFoam<br/>(sensor/cfd/unsteady.py, ~hours/case)"]
+        BEAM["Chordwise Euler-Bernoulli beam<br/>(sensor/structure/beam.py)"]
+        PACK["Shared tensor packer<br/>(sensor/cfd/adapt.py)"]
+    end
 
-    FRR --> STRUCT["2 - Structured interpretation<br/>(runner.generate, trained adapter)"]
-    FRR --> ASK["3 - Ask questions (free text)"]
-    Q["User question (free text)"] --> ASK
-    ASK --> ANS["runner.answer<br/>(base model + record + RAG)"]
+    subgraph dataset["Stage B — Dataset"]
+        GEN["Batch driver + manifest + splits<br/>(sensor/generate.py)"]
+        MAN["manifest.jsonl<br/>1,928 rows, fidelity-tagged"]
+        SPEC["Input contract v2, 13 channels<br/>(sensor/sdf.py InputSpec)"]
+        CACHE["Memmap cache + norm stats<br/>(sensor/data.py)"]
+    end
 
-    STRUCT --> OUT1["6-part structured description<br/>+ retrieved passages"]
-    ANS --> OUT2["Answer grounded in record<br/>+ cited sources"]
-    OUT1 --> U
-    OUT2 --> U
+    subgraph unet["Stage C — Surrogate"]
+        TRAIN["U-Net trainer<br/>(sensor/train.py, EMA, resumable)"]
+        MODEL["U-Net, 11.59 M params<br/>(sensor/model.py)"]
+        PRED["Predict + score<br/>(sensor/predict.py, mirror TTA)"]
+    end
+
+    subgraph bridge["Stage D — Bridge to an experiment record"]
+        BR["Steady fields -> time series<br/>(sensor/bridge.py)"]
+        RAW["RawExperiment<br/>(Data/schema.py)"]
+        FE["FFT / POD / damping extraction<br/>(features/extract.py)"]
+        NOISE["11 instrumentation detectors<br/>(features/noise.py)"]
+        FR["FeatureRecord + [data_quality]<br/>THE CONTRACT"]
+    end
+
+    subgraph slm["Stage E — Interpreter"]
+        SYN["Synthetic experiments, 5 regimes<br/>(Data/synthetic.py)"]
+        ORACLE["Rule-based oracle<br/>(Data/describe.py)"]
+        SFT["SFT dataset builder<br/>(Data/build_dataset.py)"]
+        LORA["MLX LoRA trainer<br/>(train/sft.py, rank 8, 46 MB)"]
+        BASE["Phi-4-mini-instruct 3.8 B<br/>(artifacts/models/)"]
+        IDX["FAISS index, 1,840 chunks<br/>(rag/index.py, MiniLM-L6-v2)"]
+        RUN["Inference runner<br/>(inference/runner.py)"]
+    end
+
+    subgraph out["Stage F — Surfaces"]
+        CLI["CLI, 21 commands<br/>(cli.py)"]
+        API["REST, 8 routes<br/>(serve/fastapi_app.py)"]
+        MCP["MCP, 12 tools<br/>(serve/mcp_server.py)"]
+        UI["Gradio UI<br/>(serve/gradio_app.py)"]
+    end
+
+    GEO --> PANEL & RANS & URANS
+    AOA --> PANEL & RANS & URANS
+    PANEL --> BEAM
+    RANS --> BEAM
+    URANS --> BEAM
+    BEAM --> PACK
+    PACK --> GEN --> MAN --> CACHE
+    SPEC --> CACHE
+    CACHE --> TRAIN --> MODEL --> PRED
+
+    PRED --> BR
+    RIG -.->|"replaces build_raw_experiment"| RAW
+    BR --> RAW --> FE --> FR
+    NOISE --> FR
+
+    SYN --> FE
+    FR --> SFT
+    ORACLE --> SFT
+    SFT --> LORA
+    BASE --> LORA
+    LORA --> RUN
+    BASE --> RUN
+    PDFs --> IDX --> RUN
+    FR --> RUN
+    QRY --> RUN
+
+    RUN --> CLI & API & MCP & UI
+    PRED --> CLI & API & MCP
 ```
 
-The trained LoRA adapter only does the fixed 6-part interpretation, so
-open-ended questions are routed to the **base** Phi-4-mini instruct model with
-the feature record pinned into context (and optional RAG passages) -- it never
-overrides the record's measured numbers.
+Two things in that diagram are worth stating outright rather than reading off
+the arrows:
 
-## Inference pipeline (single FeatureRecord to text)
+- **The surrogate is trained on solver output, not on the rig.** The dashed
+  arrow from `RIG` is the only unimplemented edge in the picture. Every record
+  the system produces today carries
+  `provenance.signals = "synthesised by a 1-DOF instrument model, not measured"`.
+- **The prior enters at cache time, not at solve time.** `pot_u/pot_v/pot_p` in
+  the 13-channel input are a panel solve on the same raster, so the network
+  learns the *correction* to potential flow. It costs ~40 ms per case and is
+  available at every fidelity, which is what keeps panel and RANS rows
+  interchangeable.
+
+---
+
+## 2. Surrogate pipeline (geometry → fields)
 
 ```mermaid
 flowchart LR
-    A["Client, CLI or HTTP"] -->|"POST request"| B["HTTP handler<br/>(serve/fastapi_app.py)"]
-    B --> C["Parse request<br/>(Pydantic InferRequest)"]
-    C --> D["Inference runner<br/>(inference/runner.py)"]
-    D -->|"no RAG"| E["Build prompt<br/>(render_chat + SYSTEM_PROMPT)"]
-    D -->|"use_rag"| F["Retrieve top-3<br/>(FAISS via rag/retrieve.py)"]
-    F --> G["Assemble RAG prompt<br/>(rag/prompt_assembly.py)"]
+    A[".dat section"] --> B["Parse, close TE, rotate<br/>(sensor/geometry.py)"]
+    B --> C{"Which solver?"}
+    C -->|"any alpha"| D["Hess-Smith panel<br/>+ Beddoes-Leishman stall<br/>(sensor/flow/)"]
+    C -->|"alpha <= 8 deg"| E["simpleFoam k-omega SST<br/>(sensor/cfd/run.py)"]
+    C -->|"alpha >= 10 deg"| F["pimpleFoam + fieldAverage<br/>(sensor/cfd/unsteady.py)"]
+    D --> G["Pressure -> dCp(x)"]
+    E --> G
+    F --> G
+    F --> FS["Measured f_shed<br/>(FFT of Cl(t), parabolic peak)"]
+    G --> H["Hermite beam solve<br/>(sensor/structure/beam.py)"]
+    H --> I["5 field channels + 5 scalars<br/>u, v, p, load, disp &middot; Cl, Cd, Cm, w_max, twist_TE"]
+    I --> J["128x128 npz + manifest row<br/>(sensor/cfd/adapt.py)"]
+    FS --> J
+```
+
+Solver choice is a measurement, not a preference. Every steady case at α ≥ 10°
+in the RANS sweep hit the iteration cap with initial residuals of order 10⁻² and
+lift oscillating by up to ±0.43 — massively separated flow has no steady
+solution to converge *to*. `finalize_manifest` ranks `urans > rans > panel` for
+the same (foil, angle), so re-solving upgrades a case in place.
+
+## 3. Surrogate training
+
+```mermaid
+flowchart TB
+    M["manifest.jsonl<br/>1,928 rows"] --> S["Foil-disjoint splits<br/>76 train / 14 val / 17 test"]
+    S --> C["sensor-cache<br/>13-channel memmap + norm stats"]
+    C --> D["Mirror augmentation<br/>(sensor/symmetry.py, exact)"]
+    D --> T["Train loop (sensor/train.py)"]
+    T --> L1["L1 fluid + L1 solid + Huber scalars"]
+    T --> L2["+ gradient 0.25, near-wall 3.0,<br/>divergence 0.02, circulation 0.05"]
+    T --> E["EMA weights, decay 0.999"]
+    E --> V["Validate on EMA weights"]
+    V --> B["best.pt + norm stats + input spec<br/>+ dataset fingerprint"]
+    B --> EV["sensor-eval<br/>per-fidelity, mirror TTA"]
+```
+
+Splits hold out **whole sections**, never individual angles: splitting by case
+would put the same shape in train and test at neighbouring incidences and
+inflate the score without measuring generalisation. NACA 0009 is pinned to test,
+so every number reported for it is a generalisation result.
+
+The checkpoint carries its own normalisation statistics, its input spec, and a
+fingerprint of the dataset. A changed dataset forces a recompute rather than
+silently rescaling the loss, and a mismatched cache is refused with a message
+rather than a broadcast error.
+
+## 4. The twin bridge (fields → experiment record)
+
+```mermaid
+flowchart TB
+    F["Steady fields + scalars"] --> W["Wake width<br/>(half-deficit, 1.5c downstream)"]
+    F --> SP["Separation point<br/>(first near-wall reversal)"]
+    F --> DH["Den Hartog margin<br/>dCl/dalpha + Cd < 0<br/>(2 extra solver calls)"]
+    F --> FQ{"Case has URANS row?"}
+    FQ -->|"yes"| MEAS["Measured f_shed<br/>(lookup_unsteady, manifest)"]
+    FQ -->|"no"| CORR["Roshko St on projected height<br/>c(sin &alpha; + t/c)"]
+    MEAS --> SD["SDOF transfer function<br/>at r = f_shed / f_n"]
+    CORR --> SD
+    W --> RG["Regime by rule<br/>(sensor/bridge.py:classify_regime)"]
+    SP --> RG
+    DH --> RG
+    SD --> SIG["Synthesised time series<br/>+ PIV snapshots"]
+    RG --> SIG
+    SIG --> RE["RawExperiment<br/>(+ optional injected faults)"]
+    RE --> EX["extract_features<br/>FFT, POD/SVD, damping"]
+    RE --> NZ["noise.py screen"]
+    EX --> FRC["FeatureRecord"]
+    NZ --> DQ["[data_quality] block"]
+    FRC --> P["Prompt"]
+    DQ --> P
+```
+
+`provenance.shedding_frequency` on every record says which of the two frequency
+paths was used. That distinction matters: lock-in is decided by comparing
+`f_shed` to `f_n` at the few-percent level, so a measured frequency makes the
+lock-in call mean something, and a correlated one makes it restate an
+assumption.
+
+---
+
+## 5. Interpreter: training the SLM
+
+```mermaid
+flowchart TB
+    S["Simulator, 5 regimes<br/>(Data/synthetic.py)"] --> FE["extract_features"]
+    FE --> FR["FeatureRecord"]
+    FR --> DS["build_dataset"]
+    OR["Rule-based oracle<br/>(Data/describe.py)"] --> DS
+    PT["Phi-4 chat template<br/>(train/tokenization/prompt_template.py)"] --> DS
+    DS --> J["train / val / test .jsonl<br/>split BY experiment_id"]
+    J --> T["mlx_lm LoRA<br/>mask_prompt=True"]
+    BASE["Phi-4-mini-instruct 3.8 B"] --> T
+    T --> A["adapters.safetensors<br/>rank 8, scale 16, 46 MB"]
+```
+
+`mask_prompt=True` means the loss covers assistant tokens only — the model is
+never scored on reproducing the record it was handed. The ground-truth regime is
+excluded from `to_prompt_block()`, so the model must infer it rather than copy
+it.
+
+## 6. Interpreter: serving one record
+
+```mermaid
+flowchart LR
+    A["CLI / REST / MCP / UI"] --> B["Parse request<br/>(Pydantic InferRequest)"]
+    B --> C["InferenceRunner<br/>(lazy-loads model + adapter + FAISS)"]
+    C --> D{"use_rag?"}
+    D -->|"no"| E["render_chat + SYSTEM_PROMPT"]
+    D -->|"yes"| F["Retrieve top-3<br/>(rag/retrieve.py)"]
+    F --> G["Assemble<br/>(rag/prompt_assembly.py)"]
     G --> E
-    E --> H["Generate text<br/>(mlx_lm.generate)"]
-    H --> I["Phi-4-mini and LoRA adapter<br/>(artifacts/adapters/)"]
-    I --> J["Raw text"]
-    J --> K["Parse and validate<br/>(eval/validate_output.py)"]
-    K --> L["JSON response<br/>(InferResponse)"]
-    L -->|"JSON"| A
+    E --> H["mlx_lm.generate<br/>Phi-4-mini + LoRA"]
+    H --> I["Parse + physics-check<br/>(eval/validate_output.py)"]
+    I --> J["Response + citations<br/>+ record_consistency_warnings"]
 ```
 
-## Training loop (inside train/sft.py)
+Two paths exist at serve time and they use **different models**:
+
+| Path | Model | Why |
+|---|---|---|
+| `runner.generate` — structured interpretation | base **+ LoRA adapter** | the adapter is trained on exactly the fixed 6-part format |
+| `runner.answer` — free-text Q&A | **base** instruct model | the adapter only knows the fixed format; open-ended questions go to the base model with the record pinned into context |
+
+Neither path lets retrieved passages override the record. The system prompt
+states the `FeatureRecord` is the only source of truth for measured numbers, and
+`[data_quality]` flags carry an explicit instruction not to attribute an
+instrumentation artefact to a flow mechanism.
+
+## 7. Full twin (`cli.py twin`)
 
 ```mermaid
-flowchart TB
-    S["Configuration<br/>(TrainingConfig dataclass)"] --> L["Load base model<br/>(mlx_lm.utils.load)"]
-    L --> F["Inject LoRA<br/>(linear_to_lora_layers)"]
-    F --> D["Tokenize SFT data<br/>(ChatDataset, mask_prompt=True)"]
-    D --> T["Train loop<br/>(mlx_lm.tuner.train)"]
-    T -->|"every save_every"| CK["Checkpoint file<br/>(in artifacts/adapters/)"]
-    T --> F2["Final adapter<br/>(artifacts/adapters/adapters.safetensors)"]
-    F2 --> WD["Adapter config<br/>(adapter_config.json)"]
+flowchart LR
+    G["--airfoil, --alpha"] --> S{"--use-surrogate"}
+    S -->|"true"| N["U-Net forward pass<br/>(~ms)"]
+    S -->|"false"| P["Panel + beam solve<br/>(~0.13 s)"]
+    N --> B["bridge.digital_twin"]
+    P --> B
+    B --> L["lookup_unsteady<br/>(manifest, foil stem + alpha +/- 0.25 deg)"]
+    L --> R["FeatureRecord + [data_quality]"]
+    R --> I{"--interpret"}
+    I -->|"no"| O1["JSON record"]
+    I -->|"yes"| O2["SLM interpretation<br/>(+ RAG citations)"]
 ```
 
-## Data flow summary
+---
+
+## 8. Data flow summary
 
 | Stage | Inputs | Outputs | Tool |
 |---|---|---|---|
-| Synthesize | random + regime distribution | RawExperiment list | `Data/synthetic.py` |
-| Feature extraction | RawExperiment | FeatureRecord | `features/extract.py` |
-| Build dataset | FeatureRecord + (optional) FAISS hits | train/val/test JSONL | `Data/build_dataset.py` |
-| Index corpus | PDFs in `Data/Papers/` | `index.faiss` + `metadata.json` | `rag/index.py` |
-| Train | JSONL + Phi-4-mini base | LoRA adapter | `train/sft.py` |
-| Inference | FeatureRecord (+ optional FAISS hits) + adapter | structured text | `inference/runner.py` |
-| Q&A | FeatureRecord + user question (+ FAISS hits) + base model | free-text answer | `inference/runner.py:answer` |
-| Score predictions | prediction text vs ground truth | JSON metrics | `eval/evaluate.py` |
-| Serve | same as inference | JSON via HTTP | `serve/fastapi_app.py` |
-| Web UI | real FSI data (RawExperiment/form) + question | interpretation / answer in browser | `serve/gradio_app.py` |
+| Solve (panel) | section + α + Re | 5 fields, 5 scalars | `sensor/flow/`, `sensor/structure/` |
+| Solve (steady RANS) | section + α ≤ 8° | same contract + convergence record | `sensor/cfd/` |
+| Solve (URANS) | section + α ≥ 10° | same + **measured** `f_shed` | `sensor/cfd/unsteady.py` |
+| Generate | 107 sections × 18 angles | 1,926 `.npz` + manifest + splits | `sensor/generate.py` |
+| Cache | manifest + `InputSpec` | 13-channel memmaps + norm stats | `sensor/data.py` |
+| Train surrogate | cache | `best.pt` (11.59 M params) | `sensor/train.py` |
+| Score surrogate | `best.pt` + held-out split | per-fidelity JSON metrics | `sensor/predict.py` |
+| Bridge | steady fields | `RawExperiment` | `sensor/bridge.py` |
+| Extract | `RawExperiment` | `FeatureRecord` | `features/extract.py` |
+| Screen | `RawExperiment` signals | `[data_quality]` flags | `features/noise.py` |
+| Synthesize | regime distribution | `RawExperiment` list | `Data/synthetic.py` |
+| Build SFT | `FeatureRecord` + oracle | train/val/test JSONL | `Data/build_dataset.py` |
+| Index | 16 PDFs | 1,840 chunks in FAISS | `rag/index.py` |
+| Train SLM | JSONL + Phi-4-mini | LoRA adapter | `train/sft.py` |
+| Interpret | `FeatureRecord` (+ passages) | structured text | `inference/runner.py:generate` |
+| Answer | record + question (+ passages) | free text + citations | `inference/runner.py:answer` |
+| Score SLM | prediction vs ground truth | JSON + Markdown report | `eval/evaluate.py`, `eval/report.py` |
+
+## 9. Command map
+
+```mermaid
+flowchart LR
+    subgraph sur["Surrogate"]
+        SG["sensor-generate"] --> SC["sensor-cache"]
+        SR["sensor-rans"] --> SF["sensor-finalize"]
+        SU["sensor-urans"] --> SF
+        SM["sensor-multifidelity"] --> SF
+        SF --> SC
+        SC --> ST["sensor-train"] --> SE["sensor-eval"]
+        ST --> SP["sensor-predict"]
+    end
+    subgraph int["Interpreter"]
+        GD["generate-data"] --> BD["build-dataset"] --> TR["train"] --> EV["eval"]
+        IC["index-corpus"] --> IN["infer"]
+        TR --> IN
+    end
+    SP --> TW["twin"]
+    IN --> TW
+    IN --> SV["serve"] & UI["ui"] & MC["mcp"]
+```
+
+| Surface | Entry points |
+|---|---|
+| CLI | 21 commands; `python cli.py -- --help` lists them |
+| REST | `GET /health`, `GET /schema`, `POST /infer`, `POST /infer/stream`, `GET /sensor/status`, `POST /sensor/predict`, `POST /sensor/polar`, `POST /twin` |
+| MCP | 12 tools — `interpret_experiment`, `ask_question`, `search_literature`, `validate_interpretation`, `check_experiment_consistency`, `sweep_regime_map`, `generate_synthetic_experiment`, `predict_flow`, `predict_polar`, `digital_twin_record`, `check_data_quality`, `surrogate_status` |
+| UI | Gradio: upload/enter a record, interpret, ask, what-if sweep |
+
+All three of CLI, REST and MCP call `sensor/api.py` for surrogate work and
+`inference/runner.py` for language work, so the surfaces cannot drift apart.

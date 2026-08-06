@@ -1,253 +1,339 @@
 ================================================================================
                          FSI-SLM Project Workflow
 ================================================================================
-Boxes describe what each python file DOES. The python file name is in
-parens at the end of each label, so you can grep for either.
+ASCII mirror of docs/workflow.md. Boxes describe what each python file DOES;
+the file name is in parens, so you can grep for either.
+
+TWO HALVES, ONE CONTRACT
+------------------------
+
+  SURROGATE (sensor/)          "What does the flow do?"
+      geometry + incidence  ->  fields, forces, deflection
+
+  INTERPRETER (Data/, features/, train/, rag/, inference/)
+      experiment record     ->  regime, lock-in, caveats
+
+  The contract is FeatureRecord (Data/schema.py). The surrogate produces one,
+  the interpreter consumes one. That is the ONLY coupling -- which is why a
+  real PIV rig can replace the surrogate without touching anything downstream.
+  Substitution point: sensor/bridge.py:build_raw_experiment
+
+  `cli.py twin` runs both halves back to back = the full digital twin.
+
+================================================================================
 
 END-TO-END PIPELINE
 -------------------
 
-  [PDF library                                Simulate experiment
-   (Data/Papers/*.pdf)]                       (Data/synthetic.py)]
-        |                                              |
-        v                                              v
-  +--------------+   +--------------+   +-------------+ +---------------+
-  | Chunk PDFs   |-->| Build vector |--| index of     | | Extract       |
-  | (corpus_     |   | index        |  | 5,563 paper  | | features from |
-  | loader.py)   |   | (index.py +  |  | passages     | | experiment    |
-  +------+-------+   | FAISS +      |  +------+--------+ | (features/    |
-         |          | MiniLM-L6-v2)|         |         | extract.py)   |
-         |          +--------------+          v         +-------+--------+
-         |                                   |                 |
-         |                                   |                 v
-         |                                   |        +--------+--------+
-         |                                   |        | FeatureRecord   |
-         |                                   |        | (Pydantic v2,  |
-         |                                   |        |  schema.py)     |
-         |                                   |        +--------+--------+
-         |                                   |                 |
-         |                                   v                 v
-         |                          +--------+--------+ +-------+-------+
-         |                          | RAG prompt      | | Build SFT    |
-         |                          | assembler       | | dataset      |
-         |                          | (prompt_        | | (build_      |
-         |                          |  assembly.py)   | | dataset.py + |
-         |                          +--------+--------+ | describe.py) |
-         |                                   |        +-------+-------+
-         |                                   |                |
-         |                                   |                v
-         |                                   |        +-------+--------+
-         |                                   |        | train.jsonl    |
-         |                                   |        | val.jsonl      |
-         |                                   |        | test.jsonl     |
-         |                                   |        +-------+--------+
-         |                                   |                |
-         |                                   |                v
-   +-----+---------+    +---------------+    +--+-----------------+
-   | Base language |--->| LoRA trainer  |--->| Trained adapter   |
-   | model         |    | (sft.py       |    | (artifacts/        |
-   | (artifacts/    |    |  wraps        |    |  adapters/,        |
-   |  models/Phi-4 |    |  mlx_lm.lora. |    |  rank=8, 46 MB)    |
-   |  /8 GB)       |    |  train_model) |    +--+-----------------+
-   +----------------+    +---------------+       |
-                                                 v
-   +----------------+    +---------------+   +---+-------------+
-   | Score outputs  |<---| Inference    |<--| Generate text   |
-   | (evaluate.py + |    | runner       |   | (mlx_lm.        |
-   |  validate_     |    | (runner.py)  |   |  generate,      |
-   |  output.py)    |    +-------+-------+   |  Phi-4 + LoRA)  |
-   +--------+-------+            |           +-----------------+
-            |                    |
-            |                    +---> +------------------+
-            |                          | Run single record |
-            v                          | (cli.py infer)    |
-   +--------+-------+                  +------------------+
-   | Metrics JSON   |
-   +----------------+                          +-------------------+
-                                              | HTTP server       |
-                                              | (fastapi_app.py + |
-                                              |  cli.py serve)    |
-                                              +-------------------+
+  [Airfoil .dat]  [alpha, Re]                   [Paper PDFs]   [PIV rig]
+   (Data/Airfoils)                              (Data/Papers,  (NOT connected,
+        |             |                          16 files)      contract only)
+        +------+------+                              |               :
+               |                                     v               :
+               v                                +----------+         :
+   +-----------------------------+              | Chunk +  |         :
+   | STAGE A -- SOLVE            |              | embed +  |         :
+   |   panel  (sensor/flow/)     |              | FAISS    |         :
+   |     ~0.13 s/case, any alpha |              | (rag/    |         :
+   |   RANS   (sensor/cfd/)      |              |  index)  |         :
+   |     ~4 min/case, alpha<=8   |              | 1,840    |         :
+   |   URANS  (cfd/unsteady.py)  |              | chunks   |         :
+   |     ~hours/case, alpha>=10  |              +-----+----+         :
+   |     ALSO: measured f_shed   |                    |              :
+   +--------------+--------------+                    |              :
+                  |                                   |              :
+                  v                                   |              :
+   +--------------+--------------+                    |              :
+   | Chordwise Euler-Bernoulli   |                    |              :
+   | beam (structure/beam.py)    |                    |              :
+   +--------------+--------------+                    |              :
+                  |                                   |              :
+                  v                                   |              :
+   +--------------+--------------+                    |              :
+   | Shared tensor packer        |                    |              :
+   | (sensor/cfd/adapt.py)       |                    |              :
+   | 5 fields + 5 scalars, .npz  |                    |              :
+   +--------------+--------------+                    |              :
+                  |                                   |              :
+                  v                                   |              :
+   +--------------+--------------+                    |              :
+   | STAGE B -- DATASET          |                    |              :
+   |  generate.py -> manifest    |                    |              :
+   |    1,928 rows, fidelity-    |                    |              :
+   |    tagged, foil-disjoint    |                    |              :
+   |    splits 76/14/17          |                    |              :
+   |  sdf.py -> InputSpec v2     |                    |              :
+   |    13 channels incl.        |                    |              :
+   |    inviscid prior           |                    |              :
+   |  data.py -> memmap cache    |                    |              :
+   +--------------+--------------+                    |              :
+                  |                                   |              :
+                  v                                   |              :
+   +--------------+--------------+                    |              :
+   | STAGE C -- U-NET SURROGATE  |                    |              :
+   |  train.py (EMA, resumable)  |                    |              :
+   |  model.py 11.59 M params    |                    |              :
+   |  predict.py (+ mirror TTA)  |                    |              :
+   +--------------+--------------+                    |              :
+                  |                                   |              :
+                  v                                   |              :
+   +--------------+--------------+                    |              :
+   | STAGE D -- TWIN BRIDGE      |<...................................
+   |  bridge.py                  |  (rig would enter here instead)
+   |   fields -> time series     |
+   |  extract.py  FFT/POD/damping|
+   |  noise.py    11 detectors   |
+   +--------------+--------------+
+                  |
+                  v
+        +---------+----------+
+        |  FeatureRecord     |     <== THE CONTRACT
+        |  + [data_quality]  |
+        +---------+----------+
+                  |
+     +------------+-------------+
+     |                          |
+     v                          v
+ (training path)          (serving path)
+ +----------------+       +---------------------+     +-----------------+
+ | build_dataset  |       | InferenceRunner     |<----| FAISS retrieval |
+ |  + describe.py |       | (inference/runner)  |     | (top-3 passages)|
+ |  oracle text   |       +----------+----------+     +-----------------+
+ +-------+--------+                  |
+         |                           +---> runner.generate  (base + LoRA)
+         v                           |        fixed 6-part interpretation
+ +-------+--------+                  |
+ | train/val/test |                  +---> runner.answer    (base only)
+ | .jsonl         |                           free-text Q&A, record pinned
+ +-------+--------+                                |
+         |                                         v
+         v                                +--------+---------+
+ +-------+--------+   +--------------+    | Parse + physics  |
+ | Base Phi-4-mini|-->| MLX LoRA     |--->| check            |
+ | 3.8 B          |   | (train/sft)  |    | (validate_output)|
+ +----------------+   | mask_prompt  |    +--------+---------+
+                      +------+-------+             |
+                             |                     v
+                             v            +--------+---------+
+                   +---------+--------+   | CLI / REST / MCP |
+                   | adapters.        |   | / Gradio UI      |
+                   | safetensors      |   +------------------+
+                   | rank 8, 46 MB    |
+                   +------------------+
 
 ================================================================================
 
-CLI WORKFLOW (commands and what they do)
------------------------------------------
+WHY THREE SOLVERS (this is a measurement, not a preference)
+-----------------------------------------------------------
 
-  Generate dataset
-    (cli.py generate-data -> Data/synthetic.py)
-        -- emits synthetic RawExperiments -> artifacts/raw_data/experiments.jsonl
+  alpha <= 8 deg   -> steady RANS converges to 1e-5, ~100x cheaper than transient
+  alpha >= 10 deg  -> URANS is the only one that HAS an answer
 
-  Build SFT dataset
-    (cli.py build-dataset -> Data/build_dataset.py)
-        -- converts FeatureRecord + (optional) FAISS passages to JSONL
-        -- artifacts/dataset/{train,val,test}.jsonl
+  Every steady case at alpha >= 10 hit the 2,000-iteration cap with initial
+  residuals of order 1e-2 and lift oscillating by up to +/-0.43. Massively
+  separated flow has no steady solution to converge TO -- simpleFoam
+  limit-cycles, and whichever iteration it stops on is an arbitrary point on
+  the oscillation. Convergence is recorded per case; --converged-only drops
+  the rest.
 
-  Index paper corpus
-    (cli.py index-corpus -> rag/index.py)
-        -- reads PDFs in Data/Papers/, encodes each chunk with MiniLM-L6-v2
-        -- emits artifacts/rag_index/{index.faiss, metadata.json}
-
-  Train adapter
-    (cli.py train -> train/sft.py -> mlx_lm.lora.train_model)
-        -- LoRA fine-tunes Phi-4-mini on the SFT JSONL
-        -- emits artifacts/adapters/adapters.safetensors (46 MB)
-
-  Evaluate
-    (cli.py eval -> inference/runner.py + eval/evaluate.py)
-        -- runs the trained adapter over the test split, scores against labels
-        -- emits artifacts/eval_results/eval_results.json
-
-  Run inference
-    (cli.py infer -> inference/runner.py + mlx_lm.generate)
-        -- produces structured interpretation for a single FeatureRecord
-
-  Serve
-    (cli.py serve -> serve/fastapi_app.py + inference/runner.py)
-        -- exposes /infer /health /schema on an HTTP port
+  finalize_manifest ranks urans > rans > panel for the same (foil, angle),
+  so re-solving a case upgrades it in place.
 
 ================================================================================
 
-INFERENCE FLOW (one request to /infer)
---------------------------------------
+THE 13-CHANNEL INPUT CONTRACT (sensor/sdf.py, InputSpec "v2")
+--------------------------------------------------------------
 
-   Client / curl
-        |
-        v
-   HTTP handler
-        (serve/fastapi_app.py: create_app()'s /infer endpoint)
-        |
-        v
-   Parse request body
-        (Pydantic InferRequest)
-        |
-        v
-   InferenceRunner
-        (inference/runner.py: lazy-loads model + adapter + FAISS)
-        |
-        +--- use_rag=False ----------------+
-        |                                   |
-        +--- use_rag=True ->                |
-              Retrieve top-3 passages       |
-                 (FAISS via rag/retrieve.py)|
-                        |                  |
-                        v                  v
-                 Assemble RAG prompt        |
-                    (rag/prompt_assembly.py)|
-                        |                  |
-                        v                  |
-                 Build prompt              |
-                    (render_chat + SYSTEM_PROMPT,
-                     train/tokenization/prompt_template.py)
-                        |
-                        v
-                 Generate text
-                    (mlx_lm.generate, Phi-4-mini + LoRA)
-                        |
-                        v
-                 Parse and validate
-                    (eval/validate_output.py: parse_structured_fields)
-                        |
-                        v
-                 JSON response
-                    (InferResponse)
+   sdf                 signed distance, chord units
+   x, y                grid coordinates (flow is NOT translation-invariant)
+   n_x, n_y            grad(sdf) = wall normal
+   wall                exp(-d/0.05c), near-wall emphasis + scalar-head weight
+   pot_u, pot_v, pot_p INVISCID PRIOR -- panel solution on the same raster
+   fs_x, fs_y          freestream direction     ) read back as a global
+   log_re              Reynolds conditioning    ) vector and injected
+   fidelity            panel / rans / urans     ) via FiLM, not as maps
+
+  The prior is the change that matters most: with pot_* present the network
+  predicts the CORRECTION to potential flow, not the flow. Stagnation point,
+  circulation, suction-peak location and the far field arrive already exact.
+  Costs one panel solve (~40 ms) per case at cache time, and is available at
+  every fidelity -- so a RANS row gets the same prior and the two stay
+  interchangeable.
+
+  Ablate it:  python cli.py sensor-cache --spec v2_noprior
 
 ================================================================================
 
-TRAINING LOOP (inside train/sft.py:train)
------------------------------------------
+TWIN BRIDGE DETAIL (sensor/bridge.py: steady fields -> experiment record)
+--------------------------------------------------------------------------
 
-   Configuration
-        (TrainingConfig dataclass -- lr, iters, rank, alpha, etc.)
-        |
-        v
-   Load base model
-        (mlx_lm.utils.load)
-        |
-        v
-   Inject LoRA
-        (linear_to_lora_layers applied to all linear projections)
-        |
-        v
-   Build ChatDataset
-        (mlx_lm.tuner.datasets + mask_prompt=True so loss covers
-         assistant tokens only, not the system/user prompt)
-        |
-        v
-   Training loop
-        (mlx_lm.tuner.train: cosine LR schedule, warmup,
-         gradient checkpointing, clear_cache_threshold=1GB)
-        |
-        +-- every save_every iters ----> Checkpoint file
-        |                                  (0000xxx_adapters.safetensors)
-        |
-        +-- at end ----> Final adapter
-                          (artifacts/adapters/adapters.safetensors + adapter_config.json)
+  wake width          <- half-deficit points 1.5 chords downstream
+  separation point    <- first chord station where near-wall flow reverses
+  Den Hartog margin   <- dCl/dalpha + Cd < 0  (two extra solver calls)
+  shedding frequency  <- MEASURED from the URANS lift signal when the case
+                         has one (lookup_unsteady in the manifest);
+                         otherwise Roshko St on the Fage-Johansen projected
+                         height c(sin|alpha| + t/c).
+                         provenance.shedding_frequency says WHICH.
+  structural amplitude<- SDOF transfer function at r = f_shed / f_n
+  regime              <- by rule: attached/separated by separation point,
+                         lock-in by frequency ratio, galloping by Den Hartog,
+                         stall flutter by proximity to the stall break
+
+  The match in lookup_unsteady is on the .dat stem ("n0012"), NOT the title
+  inside the file ("NACA 0012") -- those differ. Angle must agree to a
+  quarter degree, because shedding frequency varies with incidence and a
+  nearby case is a different measurement.
+
+  THE TIME SERIES ARE A MODEL OF THE INSTRUMENT, NOT A MEASUREMENT.
+  Every record says so in notes and provenance.
+
+================================================================================
+
+CLI WORKFLOW (21 commands; `python cli.py -- --help` lists them)
+-----------------------------------------------------------------
+
+  SURROGATE
+    sensor-generate      107 sections x 18 angles = 1,926 cases, ~2 min/4 cores
+    sensor-rans          steady OpenFOAM sweep; below stall only
+    sensor-urans         unsteady sweep: time-averaged fields + measured f_shed
+    sensor-multifidelity plan (--run) high-fidelity coverage of TRAINING foils
+    sensor-finalize      merge sweep chunks into manifest, highest fidelity wins
+    sensor-cache         flatten to 13-channel memmaps (--spec picks contract)
+    sensor-preflight     time real steps, project the cost of the full run
+    sensor-train         train the U-Net
+    sensor-eval          score on held-out sections (--fidelity, --tta)
+    sensor-predict       coefficients + fields for one section and incidence
+
+  INTERPRETER
+    generate-data        synthetic RawExperiments -> artifacts/raw_data/
+    build-dataset        FeatureRecord + oracle -> {train,val,test}.jsonl
+    index-corpus         PDFs -> artifacts/rag_index/{index.faiss,metadata.json}
+    train                MLX LoRA fine-tune of Phi-4-mini
+    eval                 score the test split -> eval_results.{json,md}
+    infer                interpret a single FeatureRecord
+
+  BOTH / SURFACES
+    twin                 geometry -> fields -> record -> quality -> interpretation
+    serve                FastAPI on an HTTP port
+    ui                   Gradio web UI
+    mcp                  MCP server over stdio
+    demo                 end-to-end terminal demo, no model, runs in seconds
+
+================================================================================
+
+SERVING SURFACES
+----------------
+
+  REST (serve/fastapi_app.py) -- 8 routes
+    GET  /health          GET  /schema
+    POST /infer           POST /infer/stream
+    GET  /sensor/status   POST /sensor/predict
+    POST /sensor/polar    POST /twin
+
+  MCP (serve/mcp_server.py) -- 12 tools
+    interpret_experiment          ask_question
+    search_literature             validate_interpretation
+    check_experiment_consistency  sweep_regime_map
+    generate_synthetic_experiment predict_flow
+    predict_polar                 digital_twin_record
+    check_data_quality            surrogate_status
+    resource: fsi://schema/feature_record
+
+  CLI and REST and MCP all call sensor/api.py for surrogate work and
+  inference/runner.py for language work, so the surfaces cannot drift apart.
 
 ================================================================================
 
 KEY DIRECTORIES AND THEIR ROLES
 -------------------------------
 
-  Data/                      -- "what is an FSI experiment" definitions
-    schema.py                -- FeatureRecord / RawExperiment Pydantic models
-    synthetic.py             -- simulator (5 flow regimes)
-    describe.py              -- rule-based oracle (FeatureRecord -> text)
-    build_dataset.py         -- SFT dataset builder with optional RAG aug
-    Papers/                  -- input PDFs (gitignored)
+  Data/                    -- "what is an FSI experiment" definitions
+    schema.py              -- RawExperiment / FeatureRecord Pydantic models
+    synthetic.py           -- simulator (5 flow regimes)
+    describe.py            -- rule-based oracle (FeatureRecord -> text)
+    build_dataset.py       -- SFT dataset builder
+    Papers/                -- 16 input PDFs (gitignored)
+    Airfoils/              -- 107 NACA .dat sections
 
   features/
-    extract.py               -- raw experiment -> FeatureRecord feature extractor
+    extract.py             -- RawExperiment -> FeatureRecord (FFT, POD, damping)
+    noise.py               -- 11 instrumentation-fault detectors
+    sweep.py               -- what-if regime maps over one parameter
+
+  sensor/                  -- the surrogate half
+    geometry.py            -- .dat parsing, TE closure, rotation
+    sdf.py                 -- signed distance field + InputSpec
+    flow/panel.py          -- Hess-Smith panel method
+    flow/viscous.py        -- Beddoes-Leishman stall + drag
+    flow/solve.py          -- near-wall layer, bubble, wake, pressure
+    structure/beam.py      -- chordwise Hermite beam + spanwise modal model
+    cfd/                   -- OpenFOAM backend (mesh, run, adapt, sweep, unsteady)
+    simulate.py            -- one case, end to end
+    generate.py            -- batch driver, manifest, splits
+    data.py                -- memmap cache, normalisation
+    model.py               -- U-Net (FiLM, attention, field + scalar heads)
+    train.py               -- resumable, device-agnostic training
+    predict.py             -- inference + held-out scoring
+    symmetry.py            -- exact y-mirror: augmentation + test-time averaging
+    bridge.py              -- steady fields -> time-resolved FeatureRecord
+    api.py                 -- shared entry point for CLI / REST / MCP
+    figures.py             -- figures generated from artefacts on disk
 
   rag/
-    corpus_loader.py         -- PDF chunk loader
-    index.py                 -- FAISS index builder / loader
-    retrieve.py              -- query, top-k retrieval, RetrievalResult dataclass
-    prompt_assembly.py       -- assemble RAG context into the prompt
+    corpus_loader.py       -- PDF chunk loader
+    index.py               -- FAISS index builder / loader
+    retrieve.py            -- query, top-k retrieval, RetrievalResult
+    prompt_assembly.py     -- assemble record + passages + [data_quality]
 
   train/
-    tokenization/prompt_template.py
-                            -- SYSTEM_PROMPT, render_chat, chat helpers
-    sft.py                   -- TrainingConfig + train()
-                                  (delegates to mlx_lm.lora.train_model)
+    tokenization/prompt_template.py -- SYSTEM_PROMPT, render_chat
+    sft.py                 -- TrainingConfig + train() (wraps mlx_lm)
 
-  inference/
-    runner.py                -- unified backend used by eval / infer / serve
+  inference/runner.py      -- generate() = adapter; answer() = base model
 
   eval/
-    validate_output.py       -- regex-based field extractor + validator
-    evaluate.py              -- metrics: regime_macro_f1, lock_in_f1,
-                                  avg_field_accuracy, per_field accuracy
+    validate_output.py     -- regex field extractor + physics checks
+    evaluate.py            -- regime F1, lock-in F1, per-field accuracy
+    report.py              -- Markdown report
 
   serve/
-    fastapi_app.py           -- FastAPI app factory (/infer /health /schema)
+    fastapi_app.py         -- REST
+    gradio_app.py          -- web UI
+    mcp_server.py          -- MCP over stdio
 
-  cli.py                    -- 7 subcommands via fire.Fire
-
-  configs/default.yaml       -- hyperparameter registry
-
-  artifacts/                 -- everything generated (gitignored)
-    raw_data/                -- synthetic experiments
-    dataset/                 -- SFT JSONL train/val/test
-    rag_index/                -- FAISS index over Papers
-    models/Phi-4-mini-.../   -- base language model snapshot (7.7 GB)
-    adapters/                -- THE trained SLM (46 MB)
-    eval_results/            -- JSON metric reports
+  artifacts/               -- everything generated (gitignored)
+    raw_data/              -- synthetic experiments
+    dataset/               -- SFT JSONL train/val/test
+    rag_index/             -- FAISS index over Papers (1,840 chunks)
+    models/Phi-4-mini-.../ -- base language model snapshot
+    adapters/              -- the trained SLM (46 MB)
+    cfd/                   -- .npz cases + manifest.jsonl
+    sensor/                -- memmap cache, run dirs, eval JSON
+    eval_results/          -- JSON + Markdown metric reports
 
 ================================================================================
 
 NOTES
 -----
 
-  - "Base model loads once" means mlx_lm.utils.load is expensive (~30s).
-    InferenceRunner caches the model so subsequent /infer calls take ~3s.
-  - "RAG only retrieves, doesn't modify ground truth." The system prompt
-    tells the LLM to ignore retrieved passages that conflict with the
+  - Base model loads once. mlx_lm.utils.load is ~30 s; InferenceRunner caches
+    it so subsequent /infer calls take ~3 s.
+  - RAG only retrieves, it does not modify ground truth. The system prompt
+    tells the model to ignore retrieved passages that conflict with the
     FeatureRecord's measured values.
-  - "mask_prompt=True" means loss is computed only on the assistant
-    response; tokens in system/user are ignored.
-  - Path A (paper-grounded training, 25% RAG-augmented examples) trained
-    but did not beat the no-RAG baseline; only the no-RAG adapter is
-    retained at artifacts/adapters/.
+  - mask_prompt=True means loss covers assistant tokens only; the model is
+    never scored on reproducing the record it was handed.
+  - The ground-truth regime is excluded from to_prompt_block(), so the model
+    must infer it rather than copy it.
+  - Two serve paths, two DIFFERENT models: the LoRA adapter does the fixed
+    6-part interpretation; open-ended questions go to the BASE instruct model
+    with the record pinned into context.
+  - Path A (paper-grounded training, 25% RAG-augmented examples) trained but
+    did not beat the no-RAG baseline; only the no-RAG adapter is retained.
+  - Interactive zsh does not treat '#' as a comment, so a trailing note on a
+    cli.py command arrives as positional arguments. cli.py detects and rejects
+    that rather than binding it to a parameter. Note also --alphas="-8,...":
+    a bare leading minus is parsed as a flag.
 
 ================================================================================
