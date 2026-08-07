@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import style
 style.apply()
 
-OUT = "/sessions/great-zealous-rubin/mnt/FSI-SLM/poster/generated"
-EVAL = "/sessions/great-zealous-rubin/mnt/FSI-SLM/artifacts/eval_results/eval_results.json"
+OUT = "/sessions/peaceful-focused-hamilton/mnt/FSI-SLM/poster/generated"
+EVAL = "/sessions/peaceful-focused-hamilton/mnt/FSI-SLM/artifacts/eval_results/eval_results.json"
 os.makedirs(OUT, exist_ok=True)
 with open(EVAL) as fh:
     E = json.load(fh)
