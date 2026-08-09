@@ -7,6 +7,11 @@ artifacts/
 # Datasets (PDFs are content, not source -- tracked nowhere)
 Data/Papers/
 
+# Raw PIV frames: 200 DaVis DSExport CSVs (~400 MB). Regenerable inputs, not
+# source. The derived results (results/real_piv/) ARE tracked. See that dir's
+# REPORT.md for how to place the frames back in Exports/ and re-run the pipeline.
+Exports/
+
 # Model outputs / checkpoints
 checkpoints/
 runs/
