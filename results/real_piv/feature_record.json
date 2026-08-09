@@ -1,0 +1,63 @@
+{
+  "experiment_id": "real_piv_AOA17.2_Run_120030",
+  "conditions": {
+    "reynolds_number": 156892.4471515391,
+    "angle_of_attack_deg": 17.2,
+    "freestream_velocity_m_s": 1.5689244715153907,
+    "reduced_velocity": 0.0,
+    "chord_m": 0.1
+  },
+  "pressure_strain": {
+    "pressure": 101325.0,
+    "strain": 0.0
+  },
+  "piv": {
+    "shedding_frequency_hz": 1.6500140251192368,
+    "strouhal_number": 0.10516848038742894,
+    "wake_width_over_c": 0.6536256910658006,
+    "separation_location_x_over_c": 0.1,
+    "pod_mode_amplitudes": [
+      0.0851,
+      0.0648,
+      0.0604,
+      0.0496
+    ],
+    "turbulent_kinetic_energy": 0.0016656403086108304,
+    "coherence": {
+      "cl_coherence_peak": 0.0,
+      "cd_coherence_peak": 0.0,
+      "phase_angle_deg": 0.0
+    }
+  },
+  "structure": {
+    "rms_amplitude_over_c": 0.0,
+    "dominant_frequency_hz": 0.0,
+    "natural_frequency_hz": 0.0,
+    "mode_number": 1,
+    "camber": 0.0,
+    "damping": {
+      "damping_ratio": 0.0,
+      "q_factor": 1.0
+    },
+    "spectrum": {
+      "spectral_bandwidth_hz": 0.0,
+      "spectral_kurtosis": 0.0,
+      "skewness": 0.0,
+      "kurtosis": 0.0
+    }
+  },
+  "forces": {
+    "cl_mean": 0.0,
+    "cl_rms": 0.0,
+    "cl_dominant_frequency_hz": 0.0,
+    "cd_mean": 0.0,
+    "cd_rms": 0.0,
+    "cd_dominant_frequency_hz": 0.0,
+    "cm_mean": 0.0,
+    "cm_rms": 0.0,
+    "cm_dominant_frequency_hz": 0.0
+  },
+  "classification_confidence": null,
+  "supporting_features": null,
+  "ground_truth_regime": null
+}

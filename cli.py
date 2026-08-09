@@ -1127,6 +1127,52 @@ def demo(seed: int = 0, sweep: bool = False) -> None:
             print(f"[demo] transition at U*≈{value:.2f}: {frm.value} -> {to.value}")
 
 
+def ingest_piv(
+    export_dir: str = "Exports",
+    out_dir: str = "results/real_piv",
+    chord: float = 0.100,
+    freestream: Optional[float] = None,
+    max_frames: Optional[int] = None,
+    no_figures: bool = False,
+) -> dict:
+    """Ingest a real DaVis PIV directory into a FeatureRecord + figures + report.
+
+    Converts mean-subtracted DaVis DSExport frames into a schema-valid
+    RawExperiment and, via the unchanged ``features.extract`` path, a
+    FeatureRecord; then writes ``feature_record.json``, ``analysis.json`` (full
+    provenance + PIV diagnostics), the wake probe signal, and four figures, and
+    prints the physics/instrumentation validation and the rule-based baseline.
+
+    Parameters
+    ----------
+    export_dir : str
+        Directory of ``Export.*.csv`` DaVis frames (default: ``Exports``).
+    out_dir : str
+        Where artifacts are written (default: ``results/real_piv``).
+    chord : float
+        Chord length in metres -- a rig input (not recoverable from a
+        mean-subtracted PIV field). Default 0.100 m (NACA0009 printed foil).
+    freestream : float, optional
+        Freestream velocity in m/s -- a rig input. Defaults to the pump-derived
+        rig constant in ``features.piv_ingest``.
+    max_frames : int, optional
+        Limit the number of frames (for quick smoke tests).
+    no_figures : bool
+        Skip figure rendering.
+    """
+    from features.piv_ingest import DEFAULT_FREESTREAM_M_S
+    from scripts.ingest_real_piv import run
+
+    return run(
+        export_dir=export_dir,
+        out_dir=out_dir,
+        chord=chord,
+        freestream=DEFAULT_FREESTREAM_M_S if freestream is None else freestream,
+        max_frames=max_frames,
+        no_figures=no_figures,
+    )
+
+
 def main() -> None:
     """Main entry point - dispatches to subcommands via fire.Fire."""
     import fire
@@ -1168,6 +1214,7 @@ def main() -> None:
         "sensor-eval": sensor_eval,
         "sensor-predict": sensor_predict,
         "twin": twin,
+        "ingest-piv": ingest_piv,
     })
 
 
@@ -1198,5 +1245,6 @@ __all__ = [
     "sensor_eval",
     "sensor_predict",
     "twin",
+    "ingest_piv",
     "main",
 ]

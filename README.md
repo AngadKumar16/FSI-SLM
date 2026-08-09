@@ -473,14 +473,44 @@ set_seed(42)  # seeds all RNGs
 
 ## Adding Real Experimental Data
 
-To use real PIV/structural data instead of synthetic:
+The real-data path the schema was designed for is **implemented** in
+`features/piv_ingest.py`: it converts real DaVis PIV (Particle Image Velocimetry)
+vector exports into a schema-valid `RawExperiment` and, through the *unchanged*
+`extract_features`, a `FeatureRecord` — the synthetic and real paths are identical
+from feature extraction onward.
 
-1. Convert your experimental measurements into `RawExperiment` objects matching `Data/schema.py`
-2. Run feature extraction: `extract_features(raw_experiment)` → `FeatureRecord`
-3. Add the resulting `FeatureRecord` to the dataset pipeline
-4. The ground-truth regime should be `None` for real data — the rule-based classifier in `Data/describe.py` will attempt classification
+### Ingest a real PIV run
 
-The `range_warnings()` method on `FeatureRecord` will flag any values outside expected physical ranges, helping detect unit mismatches (e.g., Hz vs rad/s, mm vs m).
+```bash
+# 200 DaVis DSExport CSV frames in Exports/  ->  FeatureRecord + figures + report
+python cli.py ingest-piv                        # writes results/real_piv/
+python cli.py ingest-piv --freestream 1.0 --chord 0.1   # override rig inputs
+
+# then interpret + physics-check the produced record
+python cli.py infer --feature-record results/real_piv/feature_record.json --baseline
+```
+
+A worked example is committed under [`results/real_piv/`](results/real_piv/REPORT.md):
+a NACA0009 at **AoA 17.2°** (deep stall) measured over 200 frames. The pipeline
+recovers the shedding spectrum, POD modes, wake width and TKE, classifies the flow
+as **separated**, and — importantly — its deterministic validators reject the LoRA
+model's over-confident "VIV lock-in" claim that was triggered by the absent
+structural channel. That is the multi-fidelity trust layer working on real data.
+
+### Notes for other real sources
+
+- These DaVis exports are **mean-subtracted fluctuation fields** ("Vector
+  Arithmetic"), so freestream `U` and chord `c` are supplied as documented rig
+  inputs (not recoverable from a zero-mean field) and used only for `St`/`Re`.
+- Channels a given export does not contain (structural displacement, `Cl/Cd/Cm`)
+  are written as zeros and **flagged** by the validators, never invented.
+- The ground-truth regime is `None` for real data; `Data/describe.py` gives an
+  independent rule-based classification.
+- `FeatureRecord.range_warnings()` flags any value outside its physical range,
+  catching unit mismatches (Hz vs rad/s, mm vs m) and missing channels.
+
+To ingest a *non-PIV* source, emit `RawExperiment` objects matching
+`Data/schema.py` and call `extract_features` — everything downstream is unchanged.
 
 ---
 
