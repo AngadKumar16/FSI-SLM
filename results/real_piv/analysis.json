@@ -1,0 +1,167 @@
+{
+  "provenance": {
+    "source_dir": "Exports",
+    "run_id": "Run 12:00:30",
+    "n_frames": 200,
+    "fs_hz": 15.00012750108397,
+    "duration_s": 13.2665361,
+    "grid_wxh": [
+      152,
+      127
+    ],
+    "dx_mm": 1.6700347212485964,
+    "davis_note": "mean-subtracted fluctuation fields (Originator 'Vector Arithmetic')"
+  },
+  "rig_inputs": {
+    "angle_of_attack_deg": 17.2,
+    "freestream_velocity_m_s": 1.5689244715153907,
+    "chord_m": 0.1,
+    "reynolds_number": 156892.4471515391,
+    "note": "U and c are rig inputs; not recoverable from mean-subtracted PIV."
+  },
+  "measured_from_piv": {
+    "shedding_frequency_hz": 1.6500140251192368,
+    "shedding_peak_over_median": 3.005482117841781,
+    "probe_xy_m": [
+      0.1285404849511,
+      0.202022012686036
+    ],
+    "strouhal_number": 0.10516848038742894,
+    "wake_width_over_c": 0.6536256910658006,
+    "wake_length_over_c": 1.4092559821548984,
+    "tke_dimensional_m2_s2": 0.004100013590548797,
+    "turbulent_kinetic_energy_norm": 0.0016656403086108304,
+    "turbulence_intensity": 0.03332306817217197,
+    "pod_mode_amplitudes": [
+      0.0851,
+      0.0648,
+      0.0604,
+      0.0496
+    ],
+    "pod_energy_fractions_top12": [
+      0.08537071235775744,
+      0.06515918953248206,
+      0.060254342425357085,
+      0.04898939593233536,
+      0.04716775156801065,
+      0.035658867344243596,
+      0.02941808269516552,
+      0.024417628538331966,
+      0.023275912397897617,
+      0.020917744324032764,
+      0.018351866329833585,
+      0.017160760974172563
+    ]
+  },
+  "estimated": {
+    "separation_location_x_over_c": 0.1,
+    "note": "separation_location x/c=0.10 is a physics-based estimate: AoA=17.2 deg is deep stall for NACA0009 (static stall ~9-10 deg), so separation is near the leading edge. The mean velocity field needed to measure it directly was removed in this fluctuation-only DaVis export."
+  },
+  "absent_channels": {
+    "reason": "PIV-only export; structural displacement and Cl/Cd/Cm come from the load-cell and video-strain subsystems, not this DaVis export.",
+    "fields": [
+      "structural_displacement",
+      "natural_frequency",
+      "cl",
+      "cd",
+      "cm"
+    ]
+  },
+  "validation": {
+    "range_warnings": [
+      "reduced_velocity=0 outside expected [0.5, 30]"
+    ],
+    "physics_consistency_warnings": [],
+    "lock_in_status": "unlocked",
+    "instrumentation_screen": {
+      "verdict": "unusable",
+      "quality_score": 0.0,
+      "flags": [
+        {
+          "name": "quantisation",
+          "severity": "warning",
+          "value": 1.0,
+          "threshold": 32.0,
+          "channel": "structural_displacement",
+          "message": "only 1 distinct values across 200 samples -- ADC resolution is coarser than the fluctuation being measured"
+        },
+        {
+          "name": "flatline",
+          "severity": "critical",
+          "value": 200.0,
+          "threshold": 20.0,
+          "channel": "structural_displacement",
+          "message": "200 consecutive identical samples -- sensor stopped responding"
+        },
+        {
+          "name": "clipping",
+          "severity": "warning",
+          "value": 0.01,
+          "threshold": 0.005,
+          "channel": "wake_velocity_probe",
+          "message": "1.0% of samples sit exactly on the signal's min/max -- the channel is railing, so RMS is biased low"
+        },
+        {
+          "name": "quantisation",
+          "severity": "warning",
+          "value": 1.0,
+          "threshold": 32.0,
+          "channel": "cl",
+          "message": "only 1 distinct values across 200 samples -- ADC resolution is coarser than the fluctuation being measured"
+        },
+        {
+          "name": "flatline",
+          "severity": "critical",
+          "value": 200.0,
+          "threshold": 20.0,
+          "channel": "cl",
+          "message": "200 consecutive identical samples -- sensor stopped responding"
+        },
+        {
+          "name": "quantisation",
+          "severity": "warning",
+          "value": 1.0,
+          "threshold": 32.0,
+          "channel": "cd",
+          "message": "only 1 distinct values across 200 samples -- ADC resolution is coarser than the fluctuation being measured"
+        },
+        {
+          "name": "flatline",
+          "severity": "critical",
+          "value": 200.0,
+          "threshold": 20.0,
+          "channel": "cd",
+          "message": "200 consecutive identical samples -- sensor stopped responding"
+        },
+        {
+          "name": "quantisation",
+          "severity": "warning",
+          "value": 1.0,
+          "threshold": 32.0,
+          "channel": "cm",
+          "message": "only 1 distinct values across 200 samples -- ADC resolution is coarser than the fluctuation being measured"
+        },
+        {
+          "name": "flatline",
+          "severity": "critical",
+          "value": 200.0,
+          "threshold": 20.0,
+          "channel": "cm",
+          "message": "200 consecutive identical samples -- sensor stopped responding"
+        }
+      ],
+      "note": "flatline flags on structural/Cl/Cd/Cm channels are expected: those channels are not in a PIV-only export."
+    }
+  },
+  "baseline_rule_based_interpretation": {
+    "regime": "separated",
+    "confidence": 0.88,
+    "top_features": {
+      "separation": 0.4,
+      "wake_width": 0.3,
+      "amplitude": 0.2,
+      "turbulence": 0.1
+    },
+    "text": "Regime: separated flow (confidence: 0.88). The wake sheds at a dominant frequency of 1.65 Hz, giving a Strouhal number St = 0.105. Lock-in status: unlocked (shedding 1.65 Hz vs. structural natural frequency 0.00 Hz). Amplitude trend: negligible (RMS displacement 0.000c). Mode shape: first structural mode (mode 1, bending/heave). Damping analysis yields \u03b6 = 0.0000 (Q = 1.0). Cross-spectral coherence between structural motion and lift is 0.000 (phase 0.0\u00b0). Signal statistics: skewness = 0.000, kurtosis = 0.000, spectral bandwidth = 0 Hz. Mechanism: Massive flow separation produces an energetic broadband wake, but the structure does not sustain a coherent limit cycle."
+  }
+}
