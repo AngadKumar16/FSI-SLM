@@ -4,14 +4,15 @@
 
 Geometry is measured off the supplied Canva template so the result drops into
 the same board: black header band with the world-map texture, lime title strip,
-three unequal columns split by hairline rules, coral section headers.
+three unequal columns split by hairline rules, coral section headers, and the
+template's own section order -- References and Acknowledgement live at the foot
+of column three.
 
 The flow engine reports how full each column is, so overflow is caught here
 rather than at the print shop.
 """
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 
 from reportlab.lib.colors import HexColor, white
@@ -31,9 +32,6 @@ OUT_PDF = ROOT / "FSI-SLM_AGU_poster_60x40.pdf"
 # --------------------------------------------------------------------------- #
 W, H = 4320.0, 2880.0
 
-# The template's black band is 0.1833*H and the lime strip 0.0396*H. That
-# leaves too little body height for this much content, so the band is tightened
-# while keeping the same three-part structure and proportions.
 HEADER_H = 400.0
 STRIP_H = 96.0
 BODY_TOP = H - HEADER_H - STRIP_H
@@ -73,6 +71,11 @@ pdfmetrics.registerFont(TTFont("Lato-BoldIt", f"{LT}/Lato-BoldItalic.ttf"))
 BODY_F, BODY_S, BODY_LEAD = "Lato", 28.0, 34.0
 CAP_F, CAP_S, CAP_LEAD = "Lato-It", 22.0, 27.0
 HEAD_F, HEAD_S = "Poppins-Bold", 52.0
+
+TITLE_L1 = "A Fine-Tuned Small Language Model for Interpreting"
+TITLE_L2 = "Fluid–Structure Interaction Experiments"
+SUBTITLE = ("A U-Net surrogate stands in for the solver and the language model "
+            "reads what comes out — the whole digital twin runs on one laptop")
 
 
 # --------------------------------------------------------------------------- #
@@ -141,7 +144,7 @@ def wrap_rich(text, width, font, size):
 class Column:
     """Top-down flow inside one column."""
 
-    def __init__(self, c, x0, x1, top, name, fig_scale=1.0):
+    def __init__(self, c, x0, x1, top, name, fig_scale=1.0, text_w=None):
         self.c = c
         self.x = x0 + PAD
         self.w = (x1 - x0) - 2 * PAD
@@ -149,6 +152,10 @@ class Column:
         self.top = top
         self.name = name
         self.fig_scale = fig_scale
+        # A 22 in measure runs to 150 characters a line, which is unreadable.
+        # Long-measure columns set a cap; the block is then centred in the
+        # column so the figure above it stays optically aligned.
+        self.text_w = min(text_w or self.w, self.w)
 
     # -- primitives -------------------------------------------------------- #
     def space(self, dy):
@@ -166,11 +173,13 @@ class Column:
 
     def para(self, text, size=BODY_S, lead=BODY_LEAD, font=BODY_F,
              color=INK, gap_after=20, indent=0.0):
-        lines = wrap_rich(text, self.w - indent, font, size)
+        measure = min(self.text_w, self.w)
+        x0 = self.x + (self.w - measure) / 2
+        lines = wrap_rich(text, measure - indent, font, size)
         space = pdfmetrics.stringWidth(" ", font, size)
         self.c.setFillColor(color)
         for line in lines:
-            xx = self.x + indent
+            xx = x0 + indent
             self.y -= lead
             for word in line:
                 for t, bold in word:
@@ -188,7 +197,8 @@ class Column:
             mark = f"{i+1}." if numbered else "▪"
             self.c.setFont("Lato-Bold", size)
             self.c.setFillColor(CORAL)
-            self.c.drawString(self.x, self.y - lead, mark)
+            self.c.drawString(self.x + (self.w - min(self.text_w, self.w)) / 2,
+                              self.y - lead, mark)
             self.para(item, size=size, lead=lead, gap_after=10,
                       indent=marker_w)
         self.y -= gap_after - 10
@@ -214,23 +224,20 @@ class Column:
 
     def figure_pair(self, left, right, gutter=44, gap_before=8, gap_after=26,
                     cap_size=CAP_S):
-        """Two figures side by side, captions beneath each.
-
-        Short wide figures waste a lot of height when stacked in a wide
-        column; paired, they use the full measure instead of sitting in a
-        pool of white space.
-        """
+        """Two figures side by side, captions beneath each."""
         x0, w0, y0 = self.x, self.w, self.y
         half = (w0 - gutter) / 2
         ends = []
+        tw = self.text_w
         for i, (path, cap) in enumerate((left, right)):
             self.x = x0 + i * (half + gutter)
             self.w = half
+            self.text_w = half
             self.y = y0
             self.figure(path, caption=cap, gap_before=gap_before,
                         gap_after=0, cap_size=cap_size)
             ends.append(self.y)
-        self.x, self.w = x0, w0
+        self.x, self.w, self.text_w = x0, w0, tw
         self.y = min(ends) - gap_after
 
     def two_up(self, left, right, size=BODY_S, lead=BODY_LEAD, head_size=46,
@@ -239,14 +246,16 @@ class Column:
         x0, w0, y0 = self.x, self.w, self.y
         half = (w0 - gutter) / 2
         ends = []
+        tw = self.text_w
         for i, (title, text) in enumerate((left, right)):
             self.x = x0 + i * (half + gutter)
             self.w = half
+            self.text_w = half
             self.y = y0
             self.header(title, gap_before=0, gap_after=12, size=head_size)
             self.para(text, size=size, lead=lead, gap_after=0)
             ends.append(self.y)
-        self.x, self.w = x0, w0
+        self.x, self.w, self.text_w = x0, w0, tw
         self.y = min(ends) - gap_after
 
     def rule(self, gap=16):
@@ -311,20 +320,49 @@ def draw_chrome(c):
     c.drawString(ax, ay - 198, "khemraj_shukla@brown.edu")
     c.setFont("Lato-It", 30)
     c.drawString(ax, ay - 236, "Brown University, Rhode Island, USA")
+    c.setFont("Lato-It", 24)
+    c.setFillColor(HexColor("#B9C0C5"))
+    c.drawString(ax, ay - 282, "*presenting author")
 
     # -- title, centred in the space the logos and authors leave ------------ #
     tl, tr = 460.0, W - 1330.0
     tc = (tl + tr) / 2
+    avail = tr - tl
+
+    ts = 82.0
+    while max(pdfmetrics.stringWidth(TITLE_L1, "Poppins", ts),
+              pdfmetrics.stringWidth(TITLE_L2, "Poppins", ts)) > avail:
+        ts -= 1.0
     c.setFillColor(white)
-    c.setFont("Poppins", 82)
-    c.drawCentredString(tc, H - 150, "FSI-SLM: An End-to-End Digital Twin")
-    c.drawCentredString(tc, H - 252, "that Reads Fluid–Structure Interaction Experiments")
-    c.setFont("Lato-It", 40)
+    c.setFont("Poppins", ts)
+    c.drawCentredString(tc, H - 150, TITLE_L1)
+    c.drawCentredString(tc, H - 150 - ts * 1.24, TITLE_L2)
+
+    ss = 40.0
+    while pdfmetrics.stringWidth(SUBTITLE, "Lato-It", ss) > avail:
+        ss -= 0.5
+    c.setFont("Lato-It", ss)
     c.setFillColor(HexColor("#DFE3E5"))
-    c.drawCentredString(
-        tc, H - 336,
-        "A U-Net flow surrogate and a small language model that interprets the "
-        "result — the whole pipeline runs on one laptop")
+    c.drawCentredString(tc, H - 336, SUBTITLE)
+
+    # -- QR to the repository, in the dead space under the AGU mark --------- #
+    qr = ASSETS / "qr_repo.png"
+    if qr.exists():
+        qs = 94.0
+        qx, qy = 112.0, H - 380.0
+        c.setFillColor(white)
+        c.rect(qx - 8, qy - 8, qs + 16, qs + 16, stroke=0, fill=1)
+        c.drawImage(ImageReader(str(qr)), qx, qy, width=qs, height=qs,
+                    mask="auto")
+        c.setFillColor(white)
+        c.setFont("Poppins-Bold", 22)
+        c.drawString(qx + qs + 22, qy + qs - 26, "CODE  &  DATA")
+        c.setFont("Lato", 20)
+        c.setFillColor(HexColor("#C9CFD3"))
+        c.drawString(qx + qs + 22, qy + qs - 54,
+                     "github.com/AngadKumar16/FSI-SLM")
+        c.drawString(qx + qs + 22, qy + qs - 80,
+                     "REST API  ·  MCP server  ·  weights")
 
     # -- lime headline strip ------------------------------------------------ #
     y0 = H - HEADER_H - STRIP_H
@@ -337,7 +375,7 @@ def draw_chrome(c):
     parts = [("1,928", " solver cases"), ("107", " airfoil sections"),
              ("R² = 0.998", " lift, unseen shapes"),
              ("2.3%", " velocity-field error"),
-             ("F1 = 0.86", " lock-in detection"), ("1", " laptop, no GPU")]
+             ("0.86", " lock-in F1 score"), ("1", " laptop, no GPU")]
     sep = "     •     "
     bold_s, reg_s = 46.0, 40.0
     total = 0.0
@@ -365,14 +403,13 @@ def draw_chrome(c):
     c.setStrokeColor(RULE)
     c.setLineWidth(GUTTER_RULE)
     for x in COL_X[1:3]:
-        c.line(x, 0, x, y0)
+        c.line(x, BOTTOM_MARGIN + 26, x, y0)
 
 
 # --------------------------------------------------------------------------- #
 def build(scales=(1.0, 1.0, 1.0), out=None, quiet=False):
     c = canvas.Canvas(str(out or OUT_PDF), pagesize=(W, H))
-    c.setTitle("FSI-SLM: An End-to-End Digital Twin that Reads "
-               "Fluid-Structure Interaction Experiments")
+    c.setTitle(f"{TITLE_L1} {TITLE_L2}")
     c.setAuthor("Angad Kumar; Khemraj Shukla")
     if not DRY:
         draw_chrome(c)
@@ -385,150 +422,168 @@ def build(scales=(1.0, 1.0, 1.0), out=None, quiet=False):
     c1 = Column(c, COL_X[0], COL_X[1], top, "column 1", scales[0])
     c1.header("MOTIVATION", gap_before=6)
     c1.para(
-        "Fluid–structure interaction decides when a hydrofoil, a riser or a "
-        "turbine blade shakes itself apart. Reading what it produces — PIV "
-        "fields, force traces, accelerometers — takes an expert, and the "
-        "expert is the bottleneck. A frontier language model discusses the "
-        "physics fluently, **invents** what it does not know, and needs a "
-        "data centre to do it.")
+        "Fluid–structure interaction (FSI) decides when a hydrofoil or a "
+        "turbine blade shakes itself apart. Reading what it produces — "
+        "particle image velocimetry (PIV) fields, force and accelerometer "
+        "traces — takes an expert, and **the expert is the bottleneck**. A "
+        "frontier model talks about the physics fluently, invents what it "
+        "does not know, and needs a data centre to do it.")
     c1.figure(FIGS_POSTER / "fig_regimes.png",
               caption="**F1.** The five flow–vibration regimes the "
-                      "interpreter must tell apart. Separating these by eye "
-                      "is the expert judgement we are automating.")
+                      "interpreter must tell apart — the expert judgement "
+                      "being automated.")
 
     c1.header("OBJECTIVES")
     c1.bullets([
-        "Reduce a raw FSI experiment to **one machine-readable record**.",
-        "Fine-tune a **small** language model to interpret the physics and "
-        "flag likely sensor noise.",
-        "**Ground** every answer in published fluid dynamics by retrieval, "
-        "so the model cites rather than invents.",
-        "Predict fields, forces **and** structural response straight from "
-        "geometry, replacing the solver.",
-        "Serve all of it from a laptop over REST and MCP.",
+        "Reduce any FSI experiment, measured or simulated, to **one "
+        "machine-readable JSON record**.",
+        "Fine-tune a **small** language model to read the physics and flag "
+        "likely sensor noise.",
+        "**Ground** each answer in published fluid dynamics by retrieval, so "
+        "the model cites rather than invents.",
+        "Predict fields, forces **and** structural response from geometry, "
+        "replacing the solver.",
+        "Serve all of it from an ordinary laptop over REST and MCP.",
     ], numbered=True)
 
     c1.header("DATA")
     c1.para(
-        "107 NACA sections at Re = 5×10⁵, 18 angles of attack each. Three "
-        "solvers write **one common tensor contract**, chosen per case by "
-        "incidence: a Hess–Smith panel method with Beddoes–Leishman stall "
-        "correction at any angle, steady RANS below stall, URANS above it "
-        "where no steady solution exists. A chordwise Euler–Bernoulli beam "
-        "turns surface pressure into load and displacement, so every case "
-        "carries structure as well as flow.")
+        "107 NACA sections, 18 angles of attack each at Re = 5×10⁵ — a "
+        "1,926-case design grid, **1,928 solved cases** on disk (1,881 panel, "
+        "35 RANS, 12 URANS). Three solvers write **one common tensor "
+        "contract**, chosen by incidence: Hess–Smith panel with "
+        "Beddoes–Leishman stall correction at any angle, steady RANS below "
+        "stall, URANS above. A chordwise Euler–Bernoulli beam turns surface "
+        "pressure into load and displacement, so every case carries structure "
+        "as well as flow. **NACA 0009 is held out entirely.**")
     c1.figure(FIGS_PAPER / "fig2_dataset.png",
-              caption="**F2.** (a) The 107 sections by maximum thickness and "
-                      "its chordwise location. Splits hold out whole "
-                      "**shapes**, so NACA 0009 (circled) is pinned to test "
-                      "and every number reported for it is a generalisation "
-                      "result. (b) Angle sampling tightens from 2° to 1° "
-                      "through stall, where the physics changes fastest. "
-                      "(c) Target fidelity, log scale.")
-    c1.figure(FIGS_PAPER / "fig6_rans.png",
-              caption="**F3.** Are the targets right? Steady-RANS validation "
-                      "on the held-out section: 15 OpenFOAM cases, k-ω SST, "
-                      "324 k cells. The converged branch gives a lift slope "
-                      "of 0.095/deg, 86% of thin-airfoil 2π, and a drag "
-                      "minimum of 0.0078 at α = 0, inside the published "
-                      "0.006–0.008 band. Every case at α ≥ 10° hit the "
-                      "iteration cap: separated flow has no steady solution "
-                      "to converge **to**. **RANS validation is claimed for "
-                      "α ≤ 8° only**; the failed cases stay in the manifest "
-                      "with their residuals.")
+              caption="**F2.** (a) Splits hold out whole **shapes**, so "
+                      "NACA 0009 (circled) is pinned to test and every number "
+                      "reported for it is a generalisation result. (b) Where "
+                      "the 18 angles per section sit. (c) Target fidelity, "
+                      "log scale; the 12 URANS cases are not plotted.")
+
+    c1.header("A REAL PIV EXPERIMENT")
+    c1.para(
+        "200 DaVis PIV frames of a NACA 0009 at **α = 17.2°**, 15 Hz on a "
+        "152 × 127 grid, through the **unchanged** feature extractor: "
+        "measured and simulated share one code path.")
+    c1.figure(FIGS_POSTER / "fig_p_realpiv.png",
+              caption="**F3.** Channels a PIV-only export cannot carry are "
+                      "written as zero and **flagged**, never invented — and "
+                      "those zeros provoke an over-confident lock-in call, "
+                      "which the deterministic validator **overrules**. A "
+                      "broad wake and a flat POD spectrum are separated flow, "
+                      "not lock-in.")
     slacks.append(c1.report(bottom, quiet))
 
     # ===================== COLUMN 2 -- how it works ====================== #
     c2 = Column(c, COL_X[1], COL_X[2], top, "column 2", scales[1])
     c2.header("METHODS", gap_before=6)
-    c2.figure(FIGS_PAPER / "fig1_system.png",
-              caption="**F4.** The twin end to end. The U-Net learns geometry "
-                      "→ fields and coefficients; the twin bridge turns a "
-                      "steady field into a time-resolved record, and eleven "
-                      "fault detectors label PIV dropout, ADC clipping and "
-                      "mains hum before the model sees anything. A LoRA-tuned "
-                      "Phi-4-mini interprets it, grounded by retrieval over "
-                      "16 papers. **The dashed red edge is the one "
-                      "unimplemented link:** a PIV rig would replace the "
-                      "synthetic experiment, and nothing downstream changes.")
-    c2.figure(FIGS_PAPER / "fig3_network.png",
-              caption="**F5.** (a) Six of the thirteen input channels. "
-                      "pot_u, pot_v, pot_p are the inviscid panel solution on "
-                      "the same raster, so the network predicts the "
-                      "**correction** to potential flow rather than the flow "
-                      "— stagnation, circulation and the far field arrive "
-                      "already exact. (b) 11.59 M parameters, self-attention "
-                      "at the 8×8 bottleneck because circulation is a global "
-                      "constraint; α, Re and fidelity enter by FiLM.")
-    c2.header("ANALOGY: WHY SMALL + GROUNDED")
     c2.para(
-        "A frontier model is a vast library with no lab notebook: fluent, "
-        "unfalsifiable, data-centre-sized. Ours is a junior lab partner "
-        "trained on **this** rig with the textbook open beside it — 46 MB "
-        "of LoRA weights over a 3.8 B model and a FAISS index it must cite "
-        "from. The U-Net is a learned wind tunnel: four minutes of RANS "
-        "collapses to milliseconds, so a new case is a lookup, not an "
-        "overnight solve.")
-    c2.header("REFERENCES", gap_before=18, gap_after=10, size=44)
+        "A 13-channel raster carries the geometry, including the **inviscid "
+        "panel solution on the same grid**, so the 11.59 M U-Net predicts the "
+        "**correction** to potential flow, not the flow. α, Re and fidelity "
+        "enter by FiLM; attention sits at the 8×8 bottleneck because "
+        "circulation is global. The reader is **Phi-4-mini** (3.8 B) plus a "
+        "46 MB LoRA adapter.")
+    c2.figure(FIGS_PAPER / "fig1_system.png",
+              caption="**F4.** The twin end to end. The bridge turns a "
+                      "steady field into a time-resolved record, and eleven "
+                      "fault detectors label dropout, clipping and mains hum "
+                      "before the model sees anything. **The dashed red edge "
+                      "is the one unimplemented link;** F3 is the measured "
+                      "path running beside it.")
+    c2.figure(FIGS_POSTER / "fig_p_serve.png",
+              caption="**F5.** Retrieval-augmented generation (RAG) over "
+                      "**1,840 passages** puts the top three into the "
+                      "prompt, so an answer carries what it leaned on. A CLI, "
+                      "a **FastAPI REST** endpoint and a **Model Context "
+                      "Protocol (MCP)** server of twelve tools all reach the "
+                      "same pipeline — which is what lets an agent drive the "
+                      "twin.")
+
+    c2.header("ANALOGY: WHY MULTI-FIDELITY")
+    c2.para(
+        "A panel solve costs 0.13 s at any angle; a steady RANS solve costs "
+        "four minutes and only converges below stall; a URANS case costs "
+        "hours. Train on the cheap tier alone and you get a fluent "
+        "approximation with a **structural blind spot**, because the beam "
+        "amplifies the leading-edge pressure difference — exactly where the "
+        "solvers disagree. The cheap tier buys coverage; the expensive tier "
+        "buys truth. The same argument sets the model size: a frontier model "
+        "is a library with no lab notebook.")
+
+    c2.header("REFERENCES", gap_before=16, gap_after=10, size=44)
     refs = [
-        "Ronneberger, O., Fischer, P., Brox, T. (2015) U-Net: convolutional "
-        "networks for biomedical image segmentation. MICCAI.",
-        "Thuerey, N. et al. (2020) Deep learning methods for Reynolds-averaged "
-        "Navier–Stokes simulations of airfoil flows. AIAA J. 58(1).",
+        "Ronneberger, O. et al. (2015) U-Net. MICCAI.   ·   Thuerey, N. et "
+        "al. (2020) Deep learning methods for RANS simulations of airfoil "
+        "flows. AIAA J. 58(1).",
         "Lewis, P. et al. (2020) Retrieval-augmented generation for "
-        "knowledge-intensive NLP tasks. NeurIPS.",
-        "Leishman, J. G., Beddoes, T. S. (1989) A semi-empirical model for "
-        "dynamic stall. J. American Helicopter Society 34(3).",
+        "knowledge-intensive NLP tasks. NeurIPS.   ·   Leishman & Beddoes "
+        "(1989) A semi-empirical model for dynamic stall. JAHS 34(3).",
+        "Hess & Smith (1967) Calculation of potential flow about arbitrary "
+        "bodies. Prog. Aerospace Sci. 8.   ·   Abbott & von Doenhoff (1959) "
+        "Theory of Wing Sections. Dover.",
+        "Anthropic (2024) Model Context Protocol specification.",
     ]
     for r in refs:
-        c2.para(r, size=20, lead=24, gap_after=2)
+        c2.para(r, size=21, lead=25, gap_after=2)
 
-    c2.header("ACKNOWLEDGEMENT", gap_before=16, gap_after=10, size=44)
+    c2.header("ACKNOWLEDGEMENT", gap_before=14, gap_after=10, size=44)
     c2.para(
-        "Thanks to Khemraj Shukla (Brown University) and the AGU Bright STaRS "
-        "program. Built with Python, PyTorch, OpenFOAM, MLX and FAISS.   Code "
-        "and data: **github.com/AngadKumar16/FSI-SLM**", size=23, lead=28)
+        "With thanks to the AGU Bright STaRS program. Built with Python, "
+        "PyTorch, OpenFOAM, MLX and FAISS.   Code, data and weights: "
+        "**github.com/AngadKumar16/FSI-SLM**", size=23, lead=28)
     slacks.append(c2.report(bottom, quiet))
 
     # ===================== COLUMN 3 -- results =========================== #
-    c3 = Column(c, COL_X[2], COL_X[3], top, "column 3", scales[2])
+    c3 = Column(c, COL_X[2], COL_X[3], top, "column 3", scales[2],
+                text_w=1210.0)
     c3.header("RESULTS", gap_before=6)
     c3.figure(FIGS_PAPER / "fig5_fields.png",
               caption="**F6.** Solver, surrogate and error on NACA 0009 at "
-                      "α = 5° — a section held out of training entirely. "
-                      "Relative RMSE 0.007 (u), 0.029 (v), 0.049 (p), 0.024 "
-                      "(load), 0.093 (displacement); error concentrates in "
-                      "the near-wall layer and the wake. Across 293 held-out "
-                      "cases on 17 unseen sections: **R² = 0.998 for lift**, "
-                      "0.995 for drag.")
+                      "α = 5°, a section held out entirely. Relative RMSE "
+                      "0.007 (u), 0.029 (v), 0.049 (p), 0.024 (load), 0.093 "
+                      "(displacement); error concentrates in the near-wall "
+                      "layer and the wake. Across **293 held-out cases on 17 "
+                      "unseen sections**, scored against "
+                      "the panel targets it was trained on: R² = 0.998 lift, "
+                      "0.995 drag, 0.991 moment, 0.968 peak deflection, "
+                      "0.786 trailing-edge twist.")
     c3.figure(FIGS_POSTER / "fig_mf_gain.png",
               caption="**F7.** Panel-only training reproduces RANS velocity "
-                      "and drag but not the structural channels — the "
-                      "chordwise beam amplifies the leading-edge pressure "
-                      "difference, exactly where the solvers disagree. Adding "
-                      "47 high-fidelity cases on **training-split** sections "
-                      "closes most of the gap at no cost to panel accuracy "
-                      "— every field channel stays within 3.1% of the "
-                      "panel-trained baseline.")
+                      "and drag but not the structural channels. Adding 47 "
+                      "high-fidelity cases on **training-split** sections "
+                      "closes most of that gap while every **field** channel "
+                      "stays within 3.1% of the panel baseline. The honest "
+                      "cost: panel-test drag MAE regresses 0.00230 → 0.00314; "
+                      "lift MAE improves 11%.")
     c3.figure(FIGS_PAPER / "fig9_interpreter.png",
-              caption="**F8.** The interpreter on 50 held-out records. The "
+              caption="**F8.** The interpreter on 50 held-out records. Regime "
+                      "classification is saturated at this sample size — a "
+                      "fact about the test set as much as the model — so the "
                       "discriminating metric is lock-in detection: recall "
-                      "1.000, precision 0.750 — it **never misses a lock-in** "
-                      "and over-calls eight. The rule-based labeller carries "
-                      "the same bias, so this was inherited, not invented.")
+                      "1.000, precision 0.750. It **never misses a lock-in** "
+                      "and over-calls eight — a bias the rule-based labeller "
+                      "shares, so it was inherited, not invented.")
 
     c3.space(10)
     c3.two_up(
         ("SUMMARY",
          "The sensor half predicts velocity, pressure, load and displacement "
          "fields plus lift, drag and moment on shapes it has never seen. The "
-         "interpreter half reads the record, names the regime, flags sensor "
-         "faults and cites what it used. Both run on one laptop."),
+         "interpreter half reads the resulting JSON record, names the regime, "
+         "flags sensor faults and cites the literature it used — and, on the "
+         "real PIV run, is overruled when it over-reaches. Both halves run on "
+         "one laptop, over REST and MCP."),
         ("FUTURE WORK",
-         "Finish the URANS sweep so the deep-stall branch becomes trainable. "
-         "Connect the PIV rig — the one dashed edge in F4. Close the "
-         "structural loop so deflection feeds back into the flow. Add "
-         "calibrated uncertainty on every field."),
+         "Acquire the structural channel alongside PIV so the real records "
+         "carry displacement, not zeros. Finish the URANS sweep so the "
+         "deep-stall branch becomes trainable. Close the structural loop so "
+         "deflection feeds back into the flow. Add calibrated uncertainty on "
+         "every field, and a harder interpreter test set now that regime "
+         "accuracy has saturated."),
         size=25, lead=30)
 
     slacks.append(c3.report(bottom, quiet))
@@ -551,16 +606,16 @@ def autofit(target=26.0):
     """
     DRY = True
     scales = [1.0, 1.0, 1.0]
-    for it in range(60):
+    for it in range(120):
         slacks = build(tuple(scales), out="/tmp/_fit.pdf", quiet=True)
         if all(target - 8 <= s for s in slacks) and max(slacks) < 260:
             break
         for i, s in enumerate(slacks):
             if s < target:
-                scales[i] *= 0.965
+                scales[i] *= 0.975
             elif s > 240 and scales[i] < 0.999:
-                scales[i] *= 1.012
-        scales = [min(1.0, max(0.55, x)) for x in scales]
+                scales[i] *= 1.010
+        scales = [min(1.0, max(0.45, x)) for x in scales]
     DRY = False
     print("fig scale per column:",
           " ".join(f"{x:.3f}" for x in scales))
