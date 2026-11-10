@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "FSI-SLM: Fluid-Structure Interaction Interpretation via Small Language Models"
+type: software
+authors:
+  - family-names: Kumar
+    given-names: Angad
+    orcid: "https://orcid.org/0009-0003-5253-3335"
+repository-code: "https://github.com/AngadKumar16/FSI-SLM"
+license: MIT
+version: "1.0.0"
+date-released: "2026-11-09"
+keywords:
+  - fluid-structure interaction
+  - particle image velocimetry
+  - small language models
+  - retrieval-augmented generation
+  - surrogate modeling

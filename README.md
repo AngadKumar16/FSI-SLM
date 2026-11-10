@@ -224,7 +224,7 @@ curl -X POST http://localhost:8000/infer \
 | `POST /sensor/polar` | Sweep incidence → `Cl`/`Cd`/`Cm` polar |
 | `POST /twin` | Geometry → fields → `FeatureRecord` + data-quality report |
 
-### 7. Use it from Claude (MCP server)
+### 7. MCP server
 
 The project ships an MCP (Model Context Protocol) server that exposes the
 interpreter as tools for Claude Desktop, Claude Code, or any MCP client:
@@ -456,17 +456,42 @@ The system distinguishes five mutually exclusive flow/aeroelastic regimes:
 
 ## Reproducibility
 
-The project is fully seeded for reproducibility:
+### Environment
 
-- Seeds can be set via the `seed` field in `configs/default.yaml` or overridden on the CLI
-- `tools/utils/repro.py` seeds Python's `random`, NumPy, PyTorch, and MLX
-- All results are deterministic given the same seed and configuration
-- The `PYTHONHASHSEED` environment variable is set for dict iteration reproducibility
+Developed and run on macOS / Apple Silicon (M4 Pro), Python 3.11. `requirements.txt`
+gives lower bounds; MLX (training) is Apple-Silicon-only, everything else runs on
+Linux. Seeds: `seed` in `configs/default.yaml`, applied by
+`tools/utils/repro.py:set_seed` to `random`, NumPy, PyTorch and MLX.
 
-```python
-from tools.utils.repro import set_seed
-set_seed(42)  # seeds all RNGs
+Seeding makes data generation, splits and the surrogate pipeline repeatable.
+LoRA training on Metal and FAISS search are not bit-for-bit deterministic across
+hardware or library versions; expect metric agreement, not identical weights.
+`PYTHONHASHSEED` only takes effect if exported before Python starts:
+
+```bash
+export PYTHONHASHSEED=42
 ```
+
+### What the reported results were built from
+
+| Item | Where |
+|---|---|
+| RAG corpus (16 open-access papers, DOI, licence, SHA-256) | [`Data/Papers/MANIFEST.md`](Data/Papers/MANIFEST.md) |
+| Index, adapter and SFT split hashes, build dates, chunks per paper | [`provenance/artifacts.json`](provenance/artifacts.json) |
+| Exact LoRA config | [`provenance/adapter_config.json`](provenance/adapter_config.json) |
+| Interpreter evaluation | [`provenance/eval_results.md`](provenance/eval_results.md) |
+| Surrogate numbers and the command behind each | [`docs/results.md`](docs/results.md) |
+| Real PIV run | [`results/real_piv/REPORT.md`](results/real_piv/REPORT.md) |
+
+### Not in the repository
+
+| Artifact | Size | How to get it |
+|---|---|---|
+| Fine-tuned adapter | ~46 MB | Gated on Hugging Face: [`AngadKumar/fsi-slm-phi4-mini`](https://huggingface.co/AngadKumar/fsi-slm-phi4-mini), or retrain (Quick Start step 3); check against `provenance/artifacts.json` |
+| RAG index | ~6 MB | `python cli.py index-corpus` |
+| SFT dataset | ~1 MB | Quick Start step 1 |
+| CFD dataset + surrogate checkpoints | ~5 GB | `python -m scripts.build_cfd_dataset`, then the surrogate pipeline below |
+| Raw DaVis PIV frames | ~400 MB | Not distributed with the repository; `results/real_piv/REPORT.md` says where they go and how to re-run |
 
 ---
 
@@ -669,7 +694,7 @@ FSI-SLM/
 │   └── fastapi_app.py      # FastAPI inference server
 ├── tools/utils/
 │   └── repro.py            # Seed-setting utilities
-├── tests/                  # 266 tests
+├── tests/                  # 265 tests
 │   ├── test_schema.py
 │   ├── test_synthetic.py
 │   ├── test_features.py
@@ -711,16 +736,20 @@ python -m pytest tests/ --cov=Data --cov=features --cov=eval --cov=rag
 
 ## License
 
-MIT
+Code: MIT, see [LICENSE](LICENSE). The papers in `Data/Papers/` keep their own
+licences (CC BY or US Government work), listed in
+[`Data/Papers/MANIFEST.md`](Data/Papers/MANIFEST.md).
 
 ## Citation
 
-If you use this work in research, please cite:
+Citation metadata is in [`CITATION.cff`](CITATION.cff) (GitHub shows a "Cite this
+repository" button). BibTeX:
 
 ```bibtex
-@software{fsi_slm,
-  author = {Angad Kumar},
-  title = {FSI-SLM: Fluid-Structure Interaction Interpretation via Small Language Models},
-  year = {2026},
-  url = {https://github.com/AngadKumar16/FSI-SLM}
+@software{kumar_fsi_slm_2026,
+  author = {Kumar, Angad},
+  title  = {{FSI-SLM}: Fluid-Structure Interaction Interpretation via Small Language Models},
+  year   = {2026},
+  url    = {https://github.com/AngadKumar16/FSI-SLM}
 }
+```

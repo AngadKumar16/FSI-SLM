@@ -1,3 +1,7 @@
+"""Build the CFD surrogate dataset for NACA 0009. Run from the repo root:
+
+    python -m scripts.build_cfd_dataset
+"""
 from sensor.cfd.dataset import build_dataset
 
 if __name__ == "__main__":
