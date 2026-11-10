@@ -1,6 +1,7 @@
 # FSI-SLM: Fluid-Structure Interaction Interpretation via Small Language Models
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Apple Silicon](https://img.shields.io/badge/platform-Apple%20Silicon-orange)](https://www.apple.com/mac/)
+[![Model on Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97-fsi--slm--phi4--mini-yellow)](https://huggingface.co/AngadKumar/fsi-slm-phi4-mini)
 
 Fine-tune **Phi-4-mini-instruct** (3.8B) to interpret fluid-structure interaction (FSI) experiments — classifying flow regimes, extracting vortex-shedding frequencies, detecting VIV lock-in, and more — all running on a single **Apple Silicon (M4 Pro)** MacBook.
 
@@ -769,7 +770,7 @@ licences (CC BY or US Government work), listed in
 
 Angad Kumar (Obra D. Tompkins High School) · Eligio Montalvo, Tomiwa Olanrewaju
 (TAMUK) · Tejas Badakere Gopalakrishna (project lead, TAMUK) · Andrew Ybarra
-(co-lead, TAMUK) · Khemraj Shukla (Brown University) · Vineeth V. Kumar (mentor)
+(co-lead, TAMUK) · Vineeth V. Kumar (mentor)
 · Rajashekar Mogiligidda (coordinator, TAMUK) · Vinod Kumar (PI, TAMUK)
 
 Developed in the ViSTA Lab, Texas A&M University–Kingsville, as Project 5 of the
@@ -789,7 +790,7 @@ repository" button). BibTeX:
 
 ```bibtex
 @software{kumar_fsi_slm_2026,
-  author = {Kumar, Angad and Montalvo, Eligio and Olanrewaju, Tomiwa and {Badakere Gopalakrishna}, Tejas and Ybarra, Andrew and Shukla, Khemraj and Kumar, Vineeth V. and Mogiligidda, Rajashekar and Kumar, Vinod},
+  author = {Kumar, Angad and Montalvo, Eligio and Olanrewaju, Tomiwa and {Badakere Gopalakrishna}, Tejas and Ybarra, Andrew and Kumar, Vineeth V. and Mogiligidda, Rajashekar and Kumar, Vinod},
   title  = {{FSI-SLM}: Fluid-Structure Interaction Interpretation via Small Language Models},
   year   = {2026},
   url    = {https://github.com/AngadKumar16/FSI-SLM}
