@@ -50,5 +50,18 @@
     "micromachines-15-00897.pdf": 215,
     "sensors-11-00001.pdf": 53,
     "sensors-25-06468-v3.pdf": 77
+  },
+  "huggingface": {
+    "repo": "AngadKumar/fsi-slm-phi4-mini (gated)",
+    "last_modified": "2026-08-07T17:45:42Z",
+    "base_model": "microsoft/Phi-4-mini-instruct",
+    "merged_model_transformers_version": "4.45.0",
+    "files_sha256": {
+      "adapters/adapters.safetensors": "7ce82595d1c025bb990bd3e57eef154a6390a4d72b1ad355a4209b9215f0cd54",
+      "model-00001-of-00002.safetensors": "3bf1e88bff0d626585b6faf10053806f4fd2d605c4bcab29634cb3dfc2b63b88",
+      "model-00002-of-00002.safetensors": "63b5661d4b5e91dbce77ec9d443c1c9d90362dfeb4f27c46014a0b28fb0d9af4",
+      "tokenizer.json": "7ea8bdf68c3e7549a3fb4342523288ce628f6ab56a618f9a4dfb234a0b4d46a8"
+    },
+    "note": "merged weights = local artifacts/models/fsi-slm-merged byte-for-byte; adapter = provenance adapters.safetensors"
   }
 }

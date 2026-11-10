@@ -7,7 +7,7 @@ are recorded here so a copy can be checked against this commit.
 | File | What it records |
 |---|---|
 | `corpus.json` | Every PDF in `Data/Papers/`: DOI, licence, SHA-256, size, chunk count in the index |
-| `artifacts.json` | SHA-256, size and build time of the FAISS index, its chunk metadata, the LoRA adapter and the SFT train/val/test splits; embedding model; chunks per source paper |
+| `artifacts.json` | SHA-256, size and build time of the FAISS index, its chunk metadata, the LoRA adapter and the SFT train/val/test splits; embedding model; chunks per source paper; SHA-256 of the merged model and adapter published on Hugging Face |
 | `adapter_config.json` | Exact LoRA config used for the fine-tune (base model `microsoft/Phi-4-mini-instruct`, rank 8, 330 iters) |
 | `eval_results.json`, `eval_results.md` | Evaluation of the fine-tuned model |
 
