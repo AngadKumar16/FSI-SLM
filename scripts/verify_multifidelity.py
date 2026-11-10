@@ -16,7 +16,7 @@ against the baseline on the same rows and fails if the high-fidelity score did
 not move or the panel score fell apart.
 
 Exit status is the point: 0 means the claim is supported, non-zero means do not
-put it on the poster.
+report it.
 """
 from __future__ import annotations
 

@@ -17,8 +17,7 @@ weights.
 | Input spec | `v2`, 13 channels |
 | Trained on | `fidelity="panel"` rows only |
 | Scores | `artifacts/sensor/eval_test_panel.json`, `eval_test_rans.json`, `eval_test_panel_notta.json`, `eval_val_run3.json` |
-| Figures (poster) | `poster/generated/fig_rans_validation.png`, `fig_fidelity_transfer.png` |
-| Figures (paper) | `paper/figures/*.pdf` — `python -m paper.figures --out paper/figures`; captions in [paper/README.md](../paper/README.md) |
+| Figures | `docs/figures/fig_rans_validation.png`, `fig_fidelity_transfer.png` |
 
 ---
 
@@ -165,7 +164,7 @@ The lift slope is the least-squares fit through **all seven** converged points,
 by 8°. Both are defensible; quoting one range in one place and another elsewhere
 is not.
 
-![RANS validation](../poster/generated/fig_rans_validation.png)
+![RANS validation](figures/fig_rans_validation.png)
 
 ---
 
@@ -188,7 +187,7 @@ apart. The RANS column is the 7 converged cases (α ≤ 8°).
 | `w_max` MAE | 2.70 × 10⁻⁴ | 1.21 × 10⁻³ | 4.47× |
 | `twist_TE` MAE | 0.227° | 0.203° | 0.90× |
 
-![Transfer](../poster/generated/fig_fidelity_transfer.png)
+![Transfer](figures/fig_fidelity_transfer.png)
 
 Four findings, in order of how much they matter:
 
@@ -447,7 +446,7 @@ python cli.py sensor-eval --checkpoint artifacts/sensor/run3/best.pt \
     --split test --fidelity panel --tta=False \
     --out-path artifacts/sensor/eval_test_panel_notta.json
 
-python -m sensor.figures --out poster/generated
+python -m sensor.figures --out docs/figures
 python -m pytest tests/ -q
 ```
 

@@ -183,19 +183,7 @@ do_eval() {
 do_verify_model() { "$PY" scripts/verify_multifidelity.py model \
                       --cfd-dir "$CFD_DIR" --run-dir "$RUN_DIR" --baseline "$BASELINE"; }
 
-do_figures() {
-  "$PY" -m sensor.figures --out poster/generated
-  # The slide comparing fidelities has to plot the fine-tuned run, not the
-  # baseline it was measured against.
-  if [ -f artifacts/sensor/eval_test_rans_mf.json ]; then
-    ( cd poster/figure_scripts && \
-      FSI_EVAL_PANEL=artifacts/sensor/eval_test_panel_mf.json \
-      FSI_EVAL_RANS=artifacts/sensor/eval_test_rans_mf.json \
-      "$PY" fig_slides_rans.py )
-  else
-    echo "no fine-tuned RANS eval; leaving the fidelity slide on baseline numbers"
-  fi
-}
+do_figures() { "$PY" -m sensor.figures --out docs/figures; }
 
 do_tests() { "$PY" -m pytest tests/ -q; }
 
@@ -214,6 +202,6 @@ stage figures      do_figures
 stage tests        do_tests
 
 say "all stages complete"
-echo "Numbers to copy into docs/results.md and the poster:"
+echo "Numbers to copy into docs/results.md:"
 echo "  artifacts/sensor/eval_test_{panel,rans,urans}_mf.json"
 echo "  $LOGS/verify_model.log"

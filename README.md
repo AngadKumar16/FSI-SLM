@@ -31,11 +31,10 @@ python cli.py twin --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12 --interp
   command that regenerates it
 - **[docs/surrogate.md](docs/surrogate.md)** — what the surrogate computes, how it
   is validated, and what it is not
-- **[docs/abstract_claims.md](docs/abstract_claims.md)** — every claim in the
-  paper abstract mapped to the code that implements it, including the two that
-  are not yet true
-- **[paper/README.md](paper/README.md)** — nine publication figures (PDF + PNG)
-  with draft captions; `python -m paper.figures --out paper/figures`
+- **[Data/Papers/MANIFEST.md](Data/Papers/MANIFEST.md)** — the 16-paper RAG
+  corpus: licence, DOI and SHA-256 of every PDF
+- **[provenance/](provenance/README.md)** — record of the RAG index and LoRA
+  fine-tune actually built from that corpus
 
 ---
 
@@ -328,7 +327,7 @@ python cli.py sensor-train --epochs 80 --batch-size 16          # 128x128
 python cli.py sensor-train --downsample 2 --base 16 --epochs 60 # fast 64x64
 python cli.py sensor-eval --split test
 python cli.py sensor-predict --airfoil Data/Airfoils/4/n0009sm.dat.txt --alpha 12
-python -m sensor.figures --out poster/generated
+python -m sensor.figures --out docs/figures
 ```
 
 Adding high fidelity — steady RANS below stall, unsteady above it, on foils the
@@ -686,7 +685,8 @@ FSI-SLM/
 ├── docs/
 │   ├── schema.md           # Schema documentation
 │   ├── surrogate.md        # Surrogate physics, validation and limits
-│   └── abstract_claims.md  # Abstract claims mapped to implementation
+│   └── figures/            # Result figures
+├── provenance/             # Training / index provenance record
 ├── cli.py                  # Unified CLI entry point
 ├── requirements.txt        # Pinned dependencies
 └── README.md               # This file

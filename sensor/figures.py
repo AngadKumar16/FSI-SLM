@@ -1,6 +1,6 @@
 """Figures for the surrogate: flow fields, polars, dataset coverage, accuracy.
 
-    python -m sensor.figures --out poster/generated
+    python -m sensor.figures --out docs/figures
 
 Every figure is generated from the artefacts actually on disk -- the manifest,
 the cache, the checkpoint -- so a figure cannot show a result the repository
@@ -482,7 +482,7 @@ def fig_urans_shedding(out: Path, manifest: str = "artifacts/cfd/manifest.jsonl"
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out", default="poster/generated")
+    ap.add_argument("--out", default="docs/figures")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
