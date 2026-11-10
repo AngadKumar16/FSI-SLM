@@ -4,8 +4,7 @@ artifacts/
 *.faiss
 *.jsonl
 
-# Datasets (PDFs are content, not source -- tracked nowhere)
-Data/Papers/
+# RAG corpus (Data/Papers/) IS tracked: open-access papers, see Data/Papers/MANIFEST.md
 
 # Raw PIV frames: 200 DaVis DSExport CSVs (~400 MB). Regenerable inputs, not
 # source. The derived results (results/real_piv/) ARE tracked. See that dir's

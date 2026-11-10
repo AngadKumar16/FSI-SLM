@@ -1,0 +1,54 @@
+{
+  "rag_index/index.faiss": {
+    "sha256": "af542fba7e6e53ad79f12e63cfe4b20ff2d96298711543cf83b3b1fe0ea3f880",
+    "bytes": 2826285,
+    "modified": "2026-07-08 00:16 UTC"
+  },
+  "rag_index/metadata.json": {
+    "sha256": "478e6c80661734eb107683e758b8be32c26f90ee6ac39b0ef321e41c3ded522f",
+    "bytes": 3345120,
+    "modified": "2026-07-08 00:16 UTC"
+  },
+  "adapters/adapters.safetensors": {
+    "sha256": "7ce82595d1c025bb990bd3e57eef154a6390a4d72b1ad355a4209b9215f0cd54",
+    "bytes": 46165292,
+    "modified": "2026-07-08 04:55 UTC"
+  },
+  "dataset/train.jsonl": {
+    "sha256": "c655c1c757d82e08823873595105ffc90b84d819f4e5674ed0d060c040906299",
+    "bytes": 820647,
+    "modified": "2026-07-08 00:14 UTC",
+    "lines": 160
+  },
+  "dataset/val.jsonl": {
+    "sha256": "331b8fa5fcde270c36985c5df49ee3fa55554a30df4b29523c8d7f408488f4e4",
+    "bytes": 102085,
+    "modified": "2026-07-08 00:14 UTC",
+    "lines": 20
+  },
+  "dataset/test.jsonl": {
+    "sha256": "8e004310edc7bb9aacc8ecd8e994a828fa448deb5f9b6a9f44d5c13cf1102f5f",
+    "bytes": 102456,
+    "modified": "2026-07-08 00:14 UTC",
+    "lines": 20
+  },
+  "rag_index/embedding_model": "all-MiniLM-L6-v2",
+  "rag_index/chunks_per_source": {
+    "19930090935.pdf": 87,
+    "applsci-11-11918.pdf": 105,
+    "biology-10-00185.pdf": 59,
+    "computation-12-00129-v2.pdf": 103,
+    "energies-15-08719-v3.pdf": 302,
+    "fluids-07-00194-v2.pdf": 100,
+    "fluids-08-00295.pdf": 135,
+    "fluids-10-00217.pdf": 217,
+    "fluids-11-00056-v2.pdf": 48,
+    "gels-08-00502-v3.pdf": 95,
+    "jmse-12-00318-v2.pdf": 74,
+    "jmse-12-01995.pdf": 71,
+    "jmse-13-01446-v3.pdf": 99,
+    "micromachines-15-00897.pdf": 215,
+    "sensors-11-00001.pdf": 53,
+    "sensors-25-06468-v3.pdf": 77
+  }
+}

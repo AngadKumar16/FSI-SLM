@@ -1,0 +1,44 @@
+{
+    "adapter_path": "artifacts/adapters",
+    "batch_size": 1,
+    "clear_cache_threshold": 0,
+    "config": null,
+    "data": "artifacts/dataset/_mlx_messages",
+    "fine_tune_type": "lora",
+    "grad_accumulation_steps": 8,
+    "grad_checkpoint": true,
+    "iters": 330,
+    "learning_rate": 0.0001,
+    "lora_parameters": {
+        "rank": 8,
+        "scale": 16,
+        "dropout": 0.05
+    },
+    "lr_schedule": {
+        "name": "cosine_decay",
+        "arguments": [
+            0.0001,
+            35
+        ],
+        "warmup": 7,
+        "warmup_init": 0.0
+    },
+    "mask_prompt": true,
+    "max_seq_length": 2048,
+    "model": "microsoft/Phi-4-mini-instruct",
+    "num_layers": -1,
+    "optimizer": "adamw",
+    "optimizer_config": {
+        "adamw": {}
+    },
+    "project_name": null,
+    "report_to": null,
+    "resume_adapter_file": "artifacts/adapters/0000150_adapters.safetensors",
+    "save_every": 50,
+    "seed": 42,
+    "steps_per_eval": 200,
+    "steps_per_report": 10,
+    "test": false,
+    "train": true,
+    "val_batches": 25
+}

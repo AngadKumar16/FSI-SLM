@@ -1,0 +1,139 @@
+{
+  "per_field_accuracy": {
+    "shedding_frequency_hz": {
+      "accuracy": 1.0,
+      "correct": 20,
+      "total": 20,
+      "mean_relative_error": 0.0007
+    },
+    "strouhal_number": {
+      "accuracy": 1.0,
+      "correct": 20,
+      "total": 20,
+      "mean_relative_error": 0.0007
+    },
+    "rms_amplitude_over_c": {
+      "accuracy": 1.0,
+      "correct": 20,
+      "total": 20,
+      "mean_relative_error": 0.0305
+    },
+    "mode_number": {
+      "accuracy": 1.0,
+      "correct": 20,
+      "total": 20,
+      "mean_relative_error": 0.0
+    }
+  },
+  "regime_confusion_matrix": {
+    "matrix": {
+      "attached": {
+        "attached": 4,
+        "separated": 0,
+        "viv_lockin": 0,
+        "galloping": 0,
+        "stall_flutter": 0
+      },
+      "separated": {
+        "attached": 0,
+        "separated": 3,
+        "viv_lockin": 0,
+        "galloping": 0,
+        "stall_flutter": 0
+      },
+      "viv_lockin": {
+        "attached": 0,
+        "separated": 0,
+        "viv_lockin": 6,
+        "galloping": 0,
+        "stall_flutter": 0
+      },
+      "galloping": {
+        "attached": 0,
+        "separated": 0,
+        "viv_lockin": 2,
+        "galloping": 1,
+        "stall_flutter": 0
+      },
+      "stall_flutter": {
+        "attached": 0,
+        "separated": 0,
+        "viv_lockin": 2,
+        "galloping": 0,
+        "stall_flutter": 2
+      }
+    },
+    "class_metrics": {
+      "attached": {
+        "true_positives": 4,
+        "false_positives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "separated": {
+        "true_positives": 3,
+        "false_positives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "viv_lockin": {
+        "true_positives": 6,
+        "false_positives": 4,
+        "false_negatives": 0,
+        "precision": 0.6,
+        "recall": 1.0,
+        "f1": 0.75
+      },
+      "galloping": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "false_negatives": 2,
+        "precision": 1.0,
+        "recall": 0.3333,
+        "f1": 0.5
+      },
+      "stall_flutter": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "false_negatives": 2,
+        "precision": 1.0,
+        "recall": 0.5,
+        "f1": 0.6667
+      }
+    },
+    "macro_f1": 0.7833,
+    "labels": [
+      "attached",
+      "separated",
+      "viv_lockin",
+      "galloping",
+      "stall_flutter"
+    ]
+  },
+  "lock_in_metrics": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "true_positives": 10,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "true_negatives": 10
+  },
+  "summary": {
+    "num_examples": 20,
+    "num_parsed": 20,
+    "regime_macro_f1": 0.7833,
+    "lock_in_f1": 1.0,
+    "regime_f1_threshold_met": true,
+    "avg_field_accuracy": 1.0
+  },
+  "meta": {
+    "predictor": "rule-based",
+    "num_records": 20,
+    "config_path": "configs/default.yaml"
+  }
+}
