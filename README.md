@@ -132,6 +132,23 @@ python -c "import faiss; print('FAISS:', faiss.__version__)"
 python -c "import torch; print('Torch:', torch.__version__)"
 ```
 
+### Model weights
+
+Weights are not stored in git. Download the exact base-model revision used for
+fine-tuning, and (optionally) the published fine-tuned model:
+
+```bash
+# base model, pinned to the revision the adapter was trained on
+hf download microsoft/Phi-4-mini-instruct \
+  --revision cfbefacb99257ffa30c83adab238a50856ac3083 \
+  --local-dir artifacts/models/Phi-4-mini-instruct
+
+# fine-tuned model + LoRA adapter (gated: request access on the model page first)
+hf download AngadKumar/fsi-slm-phi4-mini --local-dir artifacts/models/fsi-slm-merged
+```
+
+Hashes for both are in [`provenance/artifacts.json`](provenance/artifacts.json).
+
 ---
 
 ## Quick Start: End-to-End Pipeline
@@ -748,6 +765,23 @@ Code: MIT, see [LICENSE](LICENSE). The papers in `Data/Papers/` keep their own
 licences (CC BY or US Government work), listed in
 [`Data/Papers/MANIFEST.md`](Data/Papers/MANIFEST.md).
 
+## Authors
+
+Angad Kumar (Obra D. Tompkins High School) · Eligio Montalvo, Tomiwa Olanrewaju
+(TAMUK) · Tejas Badakere Gopalakrishna (project lead, TAMUK) · Andrew Ybarra
+(co-lead, TAMUK) · Khemraj Shukla (Brown University) · Vineeth V. Kumar (mentor)
+· Rajashekar Mogiligidda (coordinator, TAMUK) · Vinod Kumar (PI, TAMUK)
+
+Developed in the ViSTA Lab, Texas A&M University–Kingsville, as Project 5 of the
+Summer 2026 Research Experience.
+
+## Acknowledgements
+
+Partially funded through the Rio Grande Consortium for Advanced Research on
+Exascale Simulation (Grande CARES, DOE GRANT13584020); Acquisition of an Advanced
+Computing Testbed for HPC, AI/ML, M&S & Digital Twin Research and Education
+(DoD, W911NF-24-1-0267); and TAMUK Faculty Startup.
+
 ## Citation
 
 Citation metadata is in [`CITATION.cff`](CITATION.cff) (GitHub shows a "Cite this
@@ -755,7 +789,7 @@ repository" button). BibTeX:
 
 ```bibtex
 @software{kumar_fsi_slm_2026,
-  author = {Kumar, Angad},
+  author = {Kumar, Angad and Montalvo, Eligio and Olanrewaju, Tomiwa and {Badakere Gopalakrishna}, Tejas and Ybarra, Andrew and Shukla, Khemraj and Kumar, Vineeth V. and Mogiligidda, Rajashekar and Kumar, Vinod},
   title  = {{FSI-SLM}: Fluid-Structure Interaction Interpretation via Small Language Models},
   year   = {2026},
   url    = {https://github.com/AngadKumar16/FSI-SLM}
