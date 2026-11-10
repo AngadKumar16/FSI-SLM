@@ -6,8 +6,10 @@ from matplotlib.path import Path as MPath
 import style, joukowski, panel
 
 style.apply()
-OUT = "/sessions/peaceful-focused-hamilton/mnt/FSI-SLM/poster/generated"
-AIRFOILS = "/sessions/peaceful-focused-hamilton/mnt/FSI-SLM/Data/Airfoils"
+import os as _os
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+OUT = ROOT + "/poster/generated"
+AIRFOILS = ROOT + "/Data/Airfoils"
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -204,7 +206,7 @@ def fig_dataset_scatter():
     import json
     recs = []
     for split in ("train", "val", "test"):
-        p = f"/sessions/peaceful-focused-hamilton/mnt/FSI-SLM/artifacts/dataset/feature_records_{split}.jsonl"
+        p = f"{ROOT}/artifacts/dataset/feature_records_{split}.jsonl"
         with open(p) as fh:
             for line in fh:
                 recs.append(json.loads(line))

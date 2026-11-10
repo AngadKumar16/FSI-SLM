@@ -1,5 +1,5 @@
 const pptxgen = require("pptxgenjs");
-const FIG = "/sessions/modest-optimistic-lamport/mnt/FSI-SLM/poster/generated/";
+const FIG = require("path").join(__dirname, "generated") + "/";
 
 const NAVY = "0F2B3D", TEAL = "1F7A6E", RUST = "C8552A",
       INK = "1A1A1A", MUTE = "5B6B72", PAPER = "FFFFFF", TINT = "EEF3F4";
@@ -94,5 +94,5 @@ function caption(s, y, txt) {
   s.addNotes("Say the caveat before a judge finds it. Also: n=7, so R^2 is not meaningful on this sample - report nRMSE. Panel channels within 3 percent proves the fine-tune did not trade the cheap fidelity away.");
 }
 
-p.writeFile({ fileName: "/sessions/modest-optimistic-lamport/mnt/outputs/deck/FSI-SLM_multifidelity.pptx" })
+p.writeFile({ fileName: require("path").join(__dirname, "..", "docs", "slides", "FSI-SLM_multifidelity.pptx") })
  .then(f => console.log("wrote", f));

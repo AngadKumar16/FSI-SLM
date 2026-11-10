@@ -1,7 +1,7 @@
 # Poster build record — AGU 60 × 40 in
 
-**Deliverable:** `FSI-SLM_AGU_poster_60x40.pdf` (4320 × 2880 pt = exactly 60 × 40 in, 1 page)
-**Screen preview:** `FSI-SLM_AGU_poster_preview.png` (6000 × 4000, 100 dpi)
+**Deliverable:** `poster/output/FSI-SLM_AGU_poster_60x40.pdf` (4320 × 2880 pt = exactly 60 × 40 in, 1 page)
+**Screen preview:** `poster/output/FSI-SLM_AGU_poster_preview.png` (6000 × 4000, 100 dpi)
 
 **Title:** *A Fine-Tuned Small Language Model for Interpreting Fluid–Structure
 Interaction Experiments* — retitled to match the submitted abstract, which leads

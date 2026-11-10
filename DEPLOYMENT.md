@@ -464,7 +464,7 @@ curl http://localhost:8000/sensor/status | jq
 Asking for `fidelity="rans"` or `"urans"` from a checkpoint trained only on
 panel rows returns the prediction *plus* a warning that the conditioning channel
 is being extrapolated. This is by design, not a fault — the released checkpoint
-is panel-trained. See `implementation_plan.md` §3.2.
+is panel-trained. See `docs/implementation_plan.md` §3.2.
 
 ### Port Already in Use
 

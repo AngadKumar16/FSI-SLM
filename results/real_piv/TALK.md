@@ -1,7 +1,6 @@
 # Speaker notes — real PIV result
 
-Shareable slide page: **https://claude.ai/code/artifact/5c8b1b8a-4075-4aa4-94db-7a29423c271f**
-(private — share from the page's menu). Drop-in figure: `figures/summary_panel.png`.
+Drop-in figure: `figures/summary_panel.png`.
 
 ## The one-liner
 > We ran our **first real experimental PIV data** end-to-end through the FSI-SLM

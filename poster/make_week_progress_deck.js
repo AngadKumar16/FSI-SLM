@@ -1,5 +1,5 @@
 const pptxgen = require("pptxgenjs");
-const G = "/sessions/modest-optimistic-lamport/mnt/FSI-SLM/poster/generated/";
+const G = require("path").join(__dirname, "generated") + "/";
 const A = G + "mf_alt/";
 const CY = "3FA3C4", INK = "1A1A1A";
 
@@ -68,5 +68,5 @@ slide("Did the Expensive Data Pay Off?",
   "Each line is one quantity; the dot moves from panel-only to fine-tuned, and the number is the ratio. Below 1.0 is better. Only twist moved the wrong way. Note n = 7, so quote the error directly rather than R-squared - the sample is too small for a ratio like that to mean anything."
 );
 
-p.writeFile({ fileName: "/sessions/modest-optimistic-lamport/mnt/outputs/deck/FSI-SLM_week_progress_3slides.pptx" })
+p.writeFile({ fileName: require("path").join(__dirname, "..", "docs", "slides", "FSI-SLM_week_progress_3slides.pptx") })
  .then(f => console.log("wrote", f));

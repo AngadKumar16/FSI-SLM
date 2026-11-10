@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "poster/assets"
 FIGS_PAPER = ROOT / "paper/figures"
 FIGS_POSTER = ROOT / "poster/generated"
-OUT_PDF = ROOT / "FSI-SLM_AGU_poster_60x40_v2.pdf"
+OUT_PDF = ROOT / "poster/output/FSI-SLM_AGU_poster_60x40_v2.pdf"
 
 # --------------------------------------------------------------------------- #
 # Page geometry, in points (72 pt = 1 in). Template mediabox is 4320 x 2880.

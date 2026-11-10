@@ -6,7 +6,9 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle, Ellipse,
 import style
 from diagram_helpers import box, arrow, label, new
 style.apply()
-OUT = "/sessions/peaceful-focused-hamilton/mnt/FSI-SLM/poster/generated"
+import os as _os
+ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+OUT = ROOT + "/poster/generated"
 os.makedirs(OUT, exist_ok=True)
 
 
