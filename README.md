@@ -1,5 +1,5 @@
 # FSI-SLM: Fluid-Structure Interaction Interpretation via Small Language Models
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Apple Silicon](https://img.shields.io/badge/platform-Apple%20Silicon-orange)](https://www.apple.com/mac/)
 
 Fine-tune **Phi-4-mini-instruct** (3.8B) to interpret fluid-structure interaction (FSI) experiments — classifying flow regimes, extracting vortex-shedding frequencies, detecting VIV lock-in, and more — all running on a single **Apple Silicon (M4 Pro)** MacBook.
@@ -108,7 +108,7 @@ For a detailed end-to-end workflow diagram see:
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.10+ (results produced on 3.10.20)
 - macOS with Apple Silicon (M1/M2/M3/M4)
 - `pip` (Python package manager)
 
@@ -124,7 +124,7 @@ python -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements.txt   # or requirements-lock.txt for the exact versions
 
 # Verify installation
 python -c "import mlx.core; print('MLX:', mlx.core.__version__)"
@@ -458,9 +458,17 @@ The system distinguishes five mutually exclusive flow/aeroelastic regimes:
 
 ### Environment
 
-Developed and run on macOS / Apple Silicon (M4 Pro), Python 3.11. `requirements.txt`
-gives lower bounds; MLX (training) is Apple-Silicon-only, everything else runs on
-Linux. Seeds: `seed` in `configs/default.yaml`, applied by
+Developed and run on macOS / Apple Silicon (M4 Pro), Python 3.10.20.
+`requirements-lock.txt` pins the exact package versions the results were produced
+with; `requirements.txt` gives lower bounds. MLX (training) is Apple-Silicon-only,
+everything else runs on Linux.
+
+```bash
+conda create -n fsi-slm python=3.10.20 && conda activate fsi-slm
+pip install -r requirements-lock.txt
+```
+
+Seeds: `seed` in `configs/default.yaml`, applied by
 `tools/utils/repro.py:set_seed` to `random`, NumPy, PyTorch and MLX.
 
 Seeding makes data generation, splits and the surrogate pipeline repeatable.

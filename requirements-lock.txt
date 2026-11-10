@@ -1,0 +1,94 @@
+# Exact environment the FSI-SLM results were produced in.
+#   Python 3.10.20, macOS arm64 (Apple Silicon M4 Pro), conda env "torch-mps".
+#   Captured with `pip list --format=freeze`; Jupyter/IPython tooling removed.
+# mlx / mlx-lm / mlx-metal install only on Apple Silicon. On Linux, drop those
+# three lines: everything except MLX training still runs.
+#
+#   conda create -n fsi-slm python=3.10.20 && conda activate fsi-slm
+#   pip install -r requirements-lock.txt
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.14.1
+brotli==1.2.0
+certifi==2026.6.17
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.4.2
+cryptography==49.0.0
+exceptiongroup==1.3.1
+faiss-cpu==1.14.3
+fastapi==0.138.2
+filelock==3.29.4
+fire==0.7.1
+fsspec==2026.6.0
+gradio==6.19.0
+gradio_client==2.5.0
+groovy==0.1.2
+h11==0.16.0
+hf-gradio==0.4.1
+hf-xet==1.5.1
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==1.21.0
+idna==3.18
+iniconfig==2.3.0
+Jinja2==3.1.6
+joblib==1.5.3
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+mdurl==0.1.2
+mlx==0.31.2
+mlx-lm==0.31.3
+mlx-metal==0.31.2
+mpmath==1.3.0
+networkx==3.4.2
+numpy==2.2.6
+orjson==3.11.9
+packaging==26.2
+pandas==2.3.3
+pdfminer.six==20260107
+pillow==12.2.0
+platformdirs==4.10.0
+pluggy==1.6.0
+protobuf==7.35.1
+psutil==7.2.2
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+pydub==0.25.1
+Pygments==2.20.0
+pytest==9.1.1
+python-dateutil==2.9.0.post0
+python-multipart==0.0.32
+pytz==2026.2
+PyYAML==6.0.3
+regex==2026.6.28
+rich==15.0.0
+safehttpx==0.1.7
+safetensors==0.8.0
+scikit-learn==1.7.2
+scipy==1.15.3
+semantic-version==2.10.0
+sentence-transformers==5.6.0
+sentencepiece==0.2.1
+shellingham==1.5.4
+six==1.17.0
+starlette==1.3.1
+sympy==1.14.0
+termcolor==3.3.0
+threadpoolctl==3.6.0
+tokenizers==0.22.2
+tomli==2.4.1
+tomlkit==0.14.0
+torch==2.12.1
+tqdm==4.68.3
+transformers==5.12.1
+typer==0.25.1
+typing_extensions==4.15.0
+typing-inspection==0.4.2
+tzdata==2026.2
+uvicorn==0.49.0
+
+# Surrogate figures (sensor/figures.py). Not in the env above; version read from
+# the Matplotlib metadata embedded in docs/figures/*.png.
+matplotlib==3.10.0
